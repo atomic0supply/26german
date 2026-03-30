@@ -1,0 +1,17 @@
+node_modules
+.DS_Store
+.firebase
+firebase-debug.log
+*.log
+
+app/dist
+app/.vite
+app/playwright-report
+app/test-results
+
+functions/lib
+coverage
+
+.env
+.env.*
+!.env.example

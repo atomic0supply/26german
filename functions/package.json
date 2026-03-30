@@ -1,0 +1,34 @@
+{
+  "name": "einsatzbericht-functions",
+  "private": true,
+  "version": "0.1.0",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "deploy": "firebase deploy --only functions",
+    "seed:templates": "tsx src/seedTemplates.ts",
+    "test": "vitest run",
+    "test:integration": "firebase emulators:exec --project demo-einsatzbericht --only firestore \"vitest run test/rules.integration.test.ts\""
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.14.0",
+    "firebase-admin": "^13.7.0",
+    "firebase-functions": "^7.2.2",
+    "nodemailer": "^6.10.1",
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.0",
+    "@types/node": "^22.13.14",
+    "@types/nodemailer": "^6.4.17",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1"
+  }
+}

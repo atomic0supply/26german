@@ -1,0 +1,23 @@
+{
+  "name": "einsatzbericht-pwa",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "app",
+    "functions"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace app",
+    "dev:local": "concurrently \"npm run dev --workspace app\" \"npm run emulators\"",
+    "build": "npm run build --workspace app && npm run build --workspace functions",
+    "test": "npm run test --workspace app && npm run test --workspace functions",
+    "lint": "npm run lint --workspace app && npm run lint --workspace functions",
+    "emulators": "firebase emulators:start --only auth,firestore,storage,functions",
+    "seed:templates": "npm run seed:templates --workspace functions",
+    "provision:user": "node scripts/provision-user.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "firebase-tools": "^13.35.1"
+  }
+}

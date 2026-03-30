@@ -1,0 +1,7 @@
+import { test, expect } from "@playwright/test";
+
+test("shows login screen", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Einsatzbericht PWA" })).toBeVisible();
+  await expect(page.getByLabel("E-Mail")).toBeVisible();
+});

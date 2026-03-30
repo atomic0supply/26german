@@ -1,0 +1,39 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function reportDoc(reportId) {
+      return firestore.get(/databases/(default)/documents/reports/$(reportId));
+    }
+
+    function ownsReport(reportId) {
+      return isSignedIn() && reportDoc(reportId).data.createdBy == request.auth.uid;
+    }
+
+    function ownsDraftReport(reportId) {
+      return ownsReport(reportId) && reportDoc(reportId).data.status == 'draft';
+    }
+
+    match /report-photos/{reportId}/{allPaths=**} {
+      allow read: if ownsReport(reportId);
+      allow write: if ownsDraftReport(reportId);
+    }
+
+    match /report-signatures/{reportId}/{fileName} {
+      allow read: if ownsReport(reportId);
+      allow write: if ownsDraftReport(reportId) && fileName == 'technician.png';
+    }
+
+    match /report-pdfs/{reportId}/{fileName} {
+      allow read: if ownsReport(reportId) && fileName == 'final.pdf';
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

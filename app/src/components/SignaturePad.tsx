@@ -1,0 +1,141 @@
+import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+
+interface SignaturePadProps {
+  initialValue?: string;
+  disabled?: boolean;
+  onChange: (dataUrl: string) => void;
+}
+
+export const SignaturePad = ({ initialValue, disabled, onChange }: SignaturePadProps) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [drawing, setDrawing] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.lineWidth = 2;
+    context.lineCap = "round";
+    context.strokeStyle = "#0f3253";
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (initialValue) {
+      const image = new Image();
+      image.onload = () => {
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      };
+      image.src = initialValue;
+    }
+  }, [initialValue]);
+
+  const getOffset = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (disabled) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    const { x, y } = getOffset(event);
+    context.beginPath();
+    context.moveTo(x, y);
+    setDrawing(true);
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!drawing || disabled) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+
+    if (!canvas || !context) {
+      return;
+    }
+
+    const { x, y } = getOffset(event);
+    context.lineTo(x, y);
+    context.stroke();
+  };
+
+  const onPointerUp = () => {
+    if (disabled) {
+      return;
+    }
+
+    setDrawing(false);
+  };
+
+  const clear = () => {
+    if (disabled) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+
+    if (!canvas || !context) {
+      return;
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    onChange("");
+  };
+
+  const commit = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    onChange(canvas.toDataURL("image/png"));
+  };
+
+  return (
+    <div className="signature-wrap">
+      <canvas
+        ref={canvasRef}
+        width={560}
+        height={180}
+        className="signature-canvas"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+      />
+      <div className="signature-actions">
+        <button type="button" onClick={clear} disabled={disabled}>
+          Leeren
+        </button>
+        <button type="button" onClick={commit} disabled={disabled}>
+          Signatur übernehmen
+        </button>
+      </div>
+    </div>
+  );
+};

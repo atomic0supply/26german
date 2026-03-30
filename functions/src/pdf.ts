@@ -1,304 +1,434 @@
 import type { Bucket } from "@google-cloud/storage";
-import { PDFDocument, PDFImage, PDFFont, StandardFonts, rgb } from "pdf-lib";
-import { ReportData, TemplateConfig } from "./types";
+import {
+  ImageAlignment,
+  PDFButton,
+  PDFCheckBox,
+  PDFDocument,
+  PDFDropdown,
+  PDFField,
+  PDFOptionList,
+  PDFPage,
+  PDFRadioGroup,
+  PDFTextField,
+  rgb
+} from "pdf-lib";
+import { ReportData, TemplateConfig, TemplateFieldSchema, TemplateVersion } from "./types";
 
-const flagLabels: Record<string, string> = {
-  feuchteschaden: "Feuchteschaden",
-  druckabfall: "Druckabfall",
-  wasserverlust: "Wasserverlust",
-  wasseraustritt: "Wasseraustritt",
-  schimmel: "Schimmel",
-  eigentumer: "Eigentümer",
-  mieter: "Mieter",
-  installateur: "Installateur",
-  hausmeister: "Hausmeister",
-  hv: "HV",
-  versicherung: "Versicherung",
-  regulierer: "Regulierereinsatz zu empfehlen",
-  technischeTrocknung: "Techn. Trocknung",
-  fussbodenheizung: "Fußbodenheizung",
-  reparaturInstallateur: "Reparatur durch Installateur",
-  folgegewerke: "Folgegewerke erforderlich",
-  ersatzfliesen: "Ersatzfliesen vorhanden",
-  rueckbau: "Rückbau erforderlich",
-  schimmelbeseitigung: "Schimmelbeseitigung erforderlich",
-  inlinereinzugPruefen: "Inlinereinzug prüfen",
-  demontage: "Demontage erforderlich",
-  folgetermin: "Folgetermin erforderlich",
-  infoAquaRadar: "Info an Aqua-Radar"
+type RenderOptions = {
+  flatten?: boolean;
 };
 
-const toPdfText = (value: string, probeFont: PDFFont): string => {
-  const safe = Array.from(value ?? "")
-    .map((char) => {
-      try {
-        probeFont.encodeText(char);
-        return char;
-      } catch {
-        return "";
-      }
-    })
-    .join("");
+type SchemaTemplateInput = Pick<TemplateVersion, "editablePdfPath" | "fieldSchema">;
 
-  return safe;
+const normalizeTargets = (target: string | string[]): string[] => (Array.isArray(target) ? target : [target]);
+
+const getValueByPath = (source: unknown, path: string): unknown =>
+  path.split(".").reduce<unknown>((current, segment) => {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+
+    return (current as Record<string, unknown>)[segment];
+  }, source);
+
+const toBoolean = (value: unknown): boolean => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "ja";
+  }
+
+  return false;
 };
 
-const parseHexColor = (hexColor: string) => {
-  const normalized = hexColor.replace("#", "");
-  const value = normalized.length === 6 ? normalized : "0c2a4d";
+const toText = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return "";
+  }
 
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toText(item)).filter(Boolean).join(", ");
+  }
+
+  return "";
+};
+
+const getFieldOrThrow = (form: ReturnType<PDFDocument["getForm"]>, fieldName: string): PDFField => {
+  try {
+    return form.getField(fieldName);
+  } catch {
+    throw new Error(`MAPPED_FIELD_NOT_FOUND:${fieldName}`);
+  }
+};
+
+const assignMappedValue = (field: PDFField, value: unknown) => {
+  if (field instanceof PDFCheckBox) {
+    if (toBoolean(value)) {
+      field.check();
+    } else {
+      field.uncheck();
+    }
+    return;
+  }
+
+  if (field instanceof PDFTextField) {
+    field.setText(toText(value));
+    return;
+  }
+
+  if (field instanceof PDFDropdown) {
+    const text = toText(value);
+    if (!text) {
+      field.clear();
+      return;
+    }
+
+    const options = field.getOptions();
+    if (!options.includes(text)) {
+      field.enableEditing();
+    }
+
+    field.select(text);
+    return;
+  }
+
+  if (field instanceof PDFOptionList) {
+    const text = toText(value);
+    if (!text) {
+      field.clear();
+      return;
+    }
+
+    const options = field.getOptions();
+    if (!options.includes(text)) {
+      throw new Error(`MAPPED_OPTION_NOT_FOUND:${field.getName()}:${text}`);
+    }
+
+    field.select(text);
+    return;
+  }
+
+  if (field instanceof PDFRadioGroup) {
+    const text = toText(value);
+    if (!text) {
+      field.clear();
+      return;
+    }
+
+    const options = field.getOptions();
+    if (!options.includes(text)) {
+      throw new Error(`MAPPED_OPTION_NOT_FOUND:${field.getName()}:${text}`);
+    }
+
+    field.select(text);
+  }
+};
+
+const loadBinaryFromBucket = async (bucket: Bucket, path: string): Promise<Uint8Array | null> => {
+  if (!path) {
+    return null;
+  }
+
+  const file = bucket.file(path);
+  const [exists] = await file.exists();
+  if (!exists) {
+    return null;
+  }
+
+  const [bytes] = await file.download();
+  return bytes;
+};
+
+const embedImage = async (pdf: PDFDocument, path: string, bytes: Uint8Array) => {
+  const lowerPath = path.toLowerCase();
+  if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) {
+    return pdf.embedJpg(bytes);
+  }
+  return pdf.embedPng(bytes);
+};
+
+const assignMappedImage = async (
+  form: ReturnType<PDFDocument["getForm"]>,
+  pdf: PDFDocument,
+  fieldName: string,
+  imagePath: string,
+  bucket?: Bucket
+) => {
+  const field = getFieldOrThrow(form, fieldName);
+
+  if (!imagePath || !bucket) {
+    return;
+  }
+
+  const bytes = await loadBinaryFromBucket(bucket, imagePath);
+  if (!bytes) {
+    return;
+  }
+
+  const image = await embedImage(pdf, imagePath, bytes);
+
+  if (field instanceof PDFButton) {
+    field.setImage(image, ImageAlignment.Center);
+    return;
+  }
+
+  if (field instanceof PDFTextField) {
+    field.setImage(image);
+    return;
+  }
+
+  throw new Error(`IMAGE_FIELD_NOT_SUPPORTED:${fieldName}`);
+};
+
+const applyFixedFieldMappings = (
+  form: ReturnType<PDFDocument["getForm"]>,
+  report: ReportData,
+  template: TemplateConfig
+) => {
+  Object.entries(template.fieldMap).forEach(([logicalPath, target]) => {
+    const value = getValueByPath(report, logicalPath);
+    normalizeTargets(target).forEach((fieldName) => {
+      const field = getFieldOrThrow(form, fieldName);
+      assignMappedValue(field, value);
+    });
+  });
+};
+
+const applyFixedImageMappings = async (
+  form: ReturnType<PDFDocument["getForm"]>,
+  pdf: PDFDocument,
+  report: ReportData,
+  template: TemplateConfig,
+  bucket?: Bucket
+) => {
+  for (const [photoSlot, target] of Object.entries(template.imageFieldMap)) {
+    const photo = report.photos.find((entry) => String(entry.slot) === photoSlot);
+    for (const fieldName of normalizeTargets(target)) {
+      await assignMappedImage(form, pdf, fieldName, photo?.storagePath ?? "", bucket);
+    }
+  }
+
+  for (const fieldName of normalizeTargets(template.signatureField)) {
+    await assignMappedImage(form, pdf, fieldName, report.signature.storagePath ?? "", bucket);
+  }
+};
+
+const getSchemaFieldValue = (report: ReportData, field: TemplateFieldSchema): unknown => {
+  if (field.source === "signature") {
+    return report.signature.storagePath ?? "";
+  }
+
+  if (field.source === "image") {
+    const explicit = report.templateAssetPaths?.[field.id] ?? "";
+    if (explicit) {
+      return explicit;
+    }
+
+    const preferredSlot = Number(field.defaultValue || field.id.match(/\d+/)?.[0] || "");
+    if (!Number.isNaN(preferredSlot) && preferredSlot > 0) {
+      return report.photos.find((photo) => photo.slot === preferredSlot)?.storagePath ?? "";
+    }
+
+    return "";
+  }
+
+  return report.templateFields[field.id] ?? field.defaultValue ?? "";
+};
+
+const applySchemaFieldMappings = async (
+  form: ReturnType<PDFDocument["getForm"]>,
+  pdf: PDFDocument,
+  report: ReportData,
+  schema: TemplateFieldSchema[],
+  bucket?: Bucket
+) => {
+  for (const fieldSchema of schema) {
+    if (fieldSchema.type === "image" || fieldSchema.type === "signature") {
+      await assignMappedImage(form, pdf, fieldSchema.id, toText(getSchemaFieldValue(report, fieldSchema)), bucket);
+      continue;
+    }
+
+    const field = getFieldOrThrow(form, fieldSchema.id);
+    assignMappedValue(field, getSchemaFieldValue(report, fieldSchema));
+  }
+};
+
+const fieldRectToPdf = (page: PDFPage, rect: TemplateFieldSchema["rect"]) => {
+  const { width, height } = page.getSize();
   return {
-    r: Number.parseInt(value.slice(0, 2), 16) / 255,
-    g: Number.parseInt(value.slice(2, 4), 16) / 255,
-    b: Number.parseInt(value.slice(4, 6), 16) / 255
+    x: rect.x * width,
+    y: height - ((rect.y + rect.height) * height),
+    width: rect.width * width,
+    height: rect.height * height
   };
 };
 
-const formatFlags = (flags: Record<string, boolean>): string => {
-  const active = Object.entries(flags)
-    .filter(([, value]) => value)
-    .map(([key]) => flagLabels[key] ?? key);
+const addFieldToPage = (pdf: PDFDocument, page: PDFPage, field: TemplateFieldSchema) => {
+  const form = pdf.getForm();
+  const rect = fieldRectToPdf(page, field.rect);
+  const baseAppearance = {
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    borderWidth: 1,
+    borderColor: rgb(0.13, 0.33, 0.55),
+    backgroundColor: rgb(1, 1, 1)
+  };
 
-  return active.length > 0 ? active.join(", ") : "-";
+  switch (field.type) {
+    case "text": {
+      const textField = form.createTextField(field.id);
+      textField.addToPage(page, baseAppearance);
+      return;
+    }
+    case "textarea": {
+      const textField = form.createTextField(field.id);
+      textField.enableMultiline();
+      textField.addToPage(page, baseAppearance);
+      return;
+    }
+    case "checkbox": {
+      const checkBox = form.createCheckBox(field.id);
+      checkBox.addToPage(page, {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        borderWidth: 1,
+        borderColor: rgb(0.13, 0.33, 0.55)
+      });
+      return;
+    }
+    case "dropdown": {
+      const dropdown = form.createDropdown(field.id);
+      dropdown.addOptions(field.options);
+      dropdown.addToPage(page, baseAppearance);
+      return;
+    }
+    case "image":
+    case "signature": {
+      const button = form.createButton(field.id);
+      button.addToPage(field.label || field.id, page, baseAppearance);
+    }
+  }
 };
 
-const drawHeader = (
-  page: ReturnType<PDFDocument["addPage"]>,
-  font: PDFFont,
+const validateSchemaFields = (pdf: PDFDocument, schema: TemplateFieldSchema[]) => {
+  const actual = new Set(pdf.getForm().getFields().map((field) => field.getName()));
+  for (const field of schema) {
+    if (!actual.has(field.id)) {
+      throw new Error(`MAPPED_FIELD_NOT_FOUND:${field.id}`);
+    }
+  }
+};
+
+export const createEditablePdfFromSchema = async (
+  basePdf: Uint8Array,
+  schema: TemplateFieldSchema[]
+): Promise<Uint8Array> => {
+  const pdf = await PDFDocument.load(basePdf, { ignoreEncryption: true });
+  const pages = pdf.getPages();
+
+  for (const field of schema) {
+    const page = pages[field.page];
+    if (!page) {
+      throw new Error(`INVALID_FIELD_PAGE:${field.id}`);
+    }
+
+    addFieldToPage(pdf, page, field);
+  }
+
+  validateSchemaFields(pdf, schema);
+  return pdf.save();
+};
+
+export const fillReportPdfTemplate = async (
+  templatePdf: Uint8Array,
+  report: ReportData,
   template: TemplateConfig,
-  projectNumber: string
-) => {
-  const color = parseHexColor(template.pdfStyle.primaryColor);
+  bucket?: Bucket,
+  options: RenderOptions = {}
+): Promise<Uint8Array> => {
+  const pdf = await PDFDocument.load(templatePdf, { ignoreEncryption: true });
+  const form = pdf.getForm();
 
-  page.drawRectangle({
-    x: 0,
-    y: 792,
-    width: 595,
-    height: 50,
-    color: rgb(color.r, color.g, color.b)
-  });
+  applyFixedFieldMappings(form, report, template);
+  await applyFixedImageMappings(form, pdf, report, template, bucket);
 
-  page.drawText(toPdfText(`${template.name} Einsatzbericht`, font), {
-    x: 32,
-    y: 810,
-    size: 16,
-    color: rgb(1, 1, 1)
-  });
-
-  page.drawText(toPdfText(`Projekt: ${projectNumber || "-"}`, font), {
-    x: 400,
-    y: 810,
-    size: 11,
-    color: rgb(1, 1, 1)
-  });
-};
-
-const drawFooter = (page: ReturnType<PDFDocument["addPage"]>, font: PDFFont, footerText: string) => {
-  page.drawLine({
-    start: { x: 30, y: 40 },
-    end: { x: 565, y: 40 },
-    thickness: 1,
-    color: rgb(0.83, 0.88, 0.93)
-  });
-
-  page.drawText(toPdfText(footerText, font), {
-    x: 30,
-    y: 26,
-    size: 8,
-    color: rgb(0.28, 0.33, 0.41)
-  });
-};
-
-const loadImageFromBucket = async (bucket: Bucket | undefined, path: string) => {
-  if (!bucket || !path) {
-    return null;
+  if (options.flatten) {
+    form.flatten();
   }
 
-  try {
-    const file = bucket.file(path);
-    const [exists] = await file.exists();
-    if (!exists) {
-      return null;
-    }
-
-    const [imageBytes] = await file.download();
-    return imageBytes;
-  } catch {
-    return null;
-  }
+  return pdf.save();
 };
 
-const embedImage = async (
-  pdf: PDFDocument,
-  path: string,
-  bytes: Uint8Array
-): Promise<PDFImage | undefined> => {
-  const lowerPath = path.toLowerCase();
+export const fillReportPdfFromSchema = async (
+  editablePdf: Uint8Array,
+  report: ReportData,
+  schema: TemplateFieldSchema[],
+  bucket?: Bucket,
+  options: RenderOptions = {}
+): Promise<Uint8Array> => {
+  const pdf = await PDFDocument.load(editablePdf, { ignoreEncryption: true });
+  const form = pdf.getForm();
 
-  try {
-    if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) {
-      return await pdf.embedJpg(bytes);
-    }
-    return await pdf.embedPng(bytes);
-  } catch {
-    return undefined;
+  await applySchemaFieldMappings(form, pdf, report, schema, bucket);
+
+  if (options.flatten) {
+    form.flatten();
   }
+
+  return pdf.save();
 };
 
 export const renderReportPdf = async (
   report: ReportData,
   template: TemplateConfig,
-  bucket?: Bucket
+  bucket?: Bucket,
+  options: RenderOptions = {}
 ): Promise<Uint8Array> => {
-  const pdf = await PDFDocument.create();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const logoBytes = await loadImageFromBucket(bucket, template.logoPath);
-  const logoImage = logoBytes ? await embedImage(pdf, template.logoPath, logoBytes) : undefined;
-
-  let page = pdf.addPage([595, 842]);
-  let y = 770;
-
-  const drawPageFrame = () => {
-    drawHeader(page, bold, template, report.projectInfo.projectNumber);
-    if (logoImage) {
-      page.drawImage(logoImage, {
-        x: 470,
-        y: 798,
-        width: 90,
-        height: 32
-      });
-    }
-  };
-
-  drawPageFrame();
-
-  const ensureSpace = (requiredHeight = 18) => {
-    if (y - requiredHeight < 70) {
-      drawFooter(page, font, template.footerText);
-      page = pdf.addPage([595, 842]);
-      drawPageFrame();
-      y = 770;
-    }
-  };
-
-  const line = (label: string, value: string) => {
-    const safeLabel = toPdfText(`${label}:`, bold) || "-";
-    const safeValue = toPdfText(value || "-", font) || "-";
-    ensureSpace();
-    page.drawText(safeLabel, {
-      x: 30,
-      y,
-      size: 10,
-      font: bold,
-      color: rgb(0.13, 0.19, 0.28)
-    });
-
-    page.drawText(safeValue, {
-      x: 190,
-      y,
-      size: 10,
-      font,
-      color: rgb(0.15, 0.21, 0.31)
-    });
-
-    y -= 14;
-  };
-
-  const section = (title: string) => {
-    const safeTitle = toPdfText(title, bold) || "-";
-    ensureSpace(26);
-    const titleColor = parseHexColor(template.pdfStyle.titleColor);
-
-    page.drawText(safeTitle, {
-      x: 30,
-      y,
-      size: 12,
-      font: bold,
-      color: rgb(titleColor.r, titleColor.g, titleColor.b)
-    });
-
-    y -= 18;
-  };
-
-  section("Projekt und Termin");
-  line("Messtermin", report.projectInfo.appointmentDate);
-  line("Messtechniker", report.projectInfo.technicianName);
-  line("Erstmeldung durch", report.projectInfo.firstReportBy);
-  line("Messort / Objekt", report.projectInfo.locationObject);
-
-  section("Kontakte");
-  line("Name 1", report.contacts.name1);
-  line("Name 2", report.contacts.name2);
-  line("Straße 1", report.contacts.street1);
-  line("Straße 2", report.contacts.street2);
-  line("Ort 1", report.contacts.city1);
-  line("Ort 2", report.contacts.city2);
-  line("Telefon", [report.contacts.phone1, report.contacts.phone2].filter(Boolean).join(" / "));
-  line("Mobil", [report.contacts.mobile1, report.contacts.mobile2].filter(Boolean).join(" / "));
-  line("E-Mail", report.contacts.email);
-
-  section("Schadensbild und Anwesende");
-  line("Schadensbild", formatFlags(report.damageChecklist.flags));
-  line("Notizen", report.damageChecklist.notes);
-  line("Anwesende", formatFlags(report.attendees.flags));
-  line("Weitere Anwesende", report.attendees.notes);
-
-  section("Ergebnis und Weiteres Vorgehen");
-  line(
-    "Ergebnis Flags",
-    [
-      report.findings.causeFound ? "Ursache gefunden" : "",
-      report.findings.causeExposed ? "Ursache freigelegt" : "",
-      report.findings.temporarySeal ? "Notabdichtung" : ""
-    ]
-      .filter(Boolean)
-      .join(", ")
-  );
-  line("Ergebnistext", report.findings.summary);
-  line("Abgesprochen mit", report.actions.agreedWith);
-  line("Abzustimmen mit", report.actions.coordinateWith);
-  line("Maßnahmen", formatFlags(report.actions.flags));
-  line("Demontage", report.actions.demontageDetails);
-  line("Sonstiges", report.actions.notes);
-
-  section("Technik und Bilddokumentation");
-  line("Verfahren", report.techniques.join(", "));
-  report.photos
-    .sort((left, right) => left.slot - right.slot)
-    .forEach((photo) => {
-      line(`Bild ${photo.slot}`, `${photo.location} | ${photo.documentation}`);
-    });
-
-  section("Abrechnung und Signatur");
-  line("Arbeitszeit", `${report.billing.from} - ${report.billing.to} (${report.billing.workingTimeHours}h)`);
-  line("Signatur Name", report.signature.technicianName);
-  line("Signiert am", report.signature.signedAt);
-
-  const signatureBytes = await loadImageFromBucket(bucket, report.signature.storagePath ?? "");
-  if (signatureBytes) {
-    ensureSpace(90);
-    const signatureImage = await embedImage(pdf, report.signature.storagePath ?? "", signatureBytes);
-    if (signatureImage) {
-    page.drawText(toPdfText("Techniker-Signatur", bold), {
-      x: 30,
-      y,
-      size: 10,
-        font: bold,
-        color: rgb(0.13, 0.19, 0.28)
-      });
-
-      y -= 10;
-      page.drawImage(signatureImage, {
-        x: 30,
-        y: y - 70,
-        width: 220,
-        height: 70
-      });
-      y -= 84;
-    }
+  if (!bucket) {
+    throw new Error("STORAGE_BUCKET_NOT_CONFIGURED");
   }
 
-  drawFooter(page, font, template.footerText);
-  return pdf.save();
+  const templateBytes = await loadBinaryFromBucket(bucket, template.pdfTemplatePath);
+  if (!templateBytes) {
+    throw new Error(`TEMPLATE_PDF_NOT_FOUND:${template.pdfTemplatePath}`);
+  }
+
+  return fillReportPdfTemplate(templateBytes, report, template, bucket, options);
+};
+
+export const renderSchemaBasedPdf = async (
+  report: ReportData,
+  templateVersion: SchemaTemplateInput,
+  bucket?: Bucket,
+  options: RenderOptions = {}
+): Promise<Uint8Array> => {
+  if (!bucket) {
+    throw new Error("STORAGE_BUCKET_NOT_CONFIGURED");
+  }
+
+  const templateBytes = await loadBinaryFromBucket(bucket, templateVersion.editablePdfPath);
+  if (!templateBytes) {
+    throw new Error(`TEMPLATE_PDF_NOT_FOUND:${templateVersion.editablePdfPath}`);
+  }
+
+  return fillReportPdfFromSchema(templateBytes, report, templateVersion.fieldSchema, bucket, options);
 };

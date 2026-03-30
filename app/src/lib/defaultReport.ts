@@ -1,4 +1,4 @@
-import { ATTENDEE_OPTIONS, ACTION_OPTIONS, DAMAGE_OPTIONS } from "../constants";
+import { ATTENDEE_OPTIONS, ACTION_OPTIONS, DAMAGE_OPTIONS, TEMPLATE_FIELD_DEFINITIONS } from "../constants";
 import { ReportData, TemplateId } from "../types";
 
 const buildFlagMap = <T extends string>(keys: T[]) =>
@@ -12,6 +12,10 @@ const buildFlagMap = <T extends string>(keys: T[]) =>
 
 export const createDefaultReport = (uid: string, template: TemplateId = "svt"): ReportData => {
   const now = new Date().toISOString();
+  const templateFields = TEMPLATE_FIELD_DEFINITIONS.reduce<Record<string, string | boolean>>((acc, field) => {
+    acc[field.key] = field.type === "checkbox" ? false : "";
+    return acc;
+  }, {});
 
   return {
     clientId: "",
@@ -64,6 +68,9 @@ export const createDefaultReport = (uid: string, template: TemplateId = "svt"): 
       to: "",
       workingTimeHours: ""
     },
+    templateFields,
+    templateAssetPaths: {},
+    templateAssetUrls: {},
     signature: {
       technicianName: "",
       signedAt: ""

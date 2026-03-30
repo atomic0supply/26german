@@ -1,6 +1,13 @@
 export type ReportStatus = "draft" | "finalized";
-
-export type TemplateId = "svt" | "brasa" | "angerhausen" | "aqua-braun";
+export type UserRole = "technician" | "admin" | "office";
+export type BuiltinTemplateId = "svt" | "brasa" | "angerhausen" | "aqua-braun";
+export type TemplateId = BuiltinTemplateId | "custom";
+export type TemplateFieldValue = string | boolean;
+export type TemplateFieldMap = Record<string, string | string[]>;
+export type TemplateImageFieldMap = Record<string, string | string[]>;
+export type TemplateStatus = "draft" | "published";
+export type TemplateFieldType = "text" | "textarea" | "checkbox" | "dropdown" | "image" | "signature";
+export type TemplateFieldSource = "dynamic" | "image" | "signature";
 
 export type DamageKey =
   | "feuchteschaden"
@@ -111,9 +118,57 @@ export interface FinalizationInfo {
   pdfVersion: number;
 }
 
+export interface TemplateFieldRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TemplateFieldSchema {
+  id: string;
+  type: TemplateFieldType;
+  source: TemplateFieldSource;
+  label: string;
+  page: number;
+  rect: TemplateFieldRect;
+  required: boolean;
+  options: string[];
+  defaultValue: string;
+  helpText: string;
+}
+
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  brand: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  publishedVersionId?: string;
+  status: TemplateStatus;
+}
+
+export interface TemplateVersion {
+  id: string;
+  templateId: string;
+  basePdfPath: string;
+  editablePdfPath: string;
+  fieldSchema: TemplateFieldSchema[];
+  versionNumber: number;
+  createdBy: string;
+  createdAt: string;
+  publishedAt?: string;
+  publishedBy?: string;
+  status: TemplateStatus;
+}
+
 export interface ReportData {
   clientId: string;
   brandTemplateId: TemplateId;
+  templateRef?: string;
+  templateVersionRef?: string;
+  templateName?: string;
   projectInfo: ProjectInfo;
   contacts: ContactDetails;
   damageChecklist: DamageChecklist;
@@ -123,6 +178,9 @@ export interface ReportData {
   techniques: string[];
   photos: ReportPhoto[];
   billing: Billing;
+  templateFields: Record<string, TemplateFieldValue>;
+  templateAssetPaths?: Record<string, string>;
+  templateAssetUrls?: Record<string, string>;
   signature: Signature;
   status: ReportStatus;
   createdBy: string;
@@ -148,11 +206,17 @@ export interface ReportListItem {
   status: ReportStatus;
   updatedAt: string;
   template: TemplateId;
+  templateName?: string;
 }
 
 export interface TemplateConfig {
-  id: TemplateId;
+  id: BuiltinTemplateId;
   name: string;
+  pdfTemplatePath: string;
+  fieldMap: TemplateFieldMap;
+  imageFieldMap: TemplateImageFieldMap;
+  signatureField: string;
+  requiredTemplateFields: string[];
   logoPath: string;
   footerText: string;
   headerFields: string[];
@@ -160,6 +224,14 @@ export interface TemplateConfig {
     primaryColor: string;
     titleColor: string;
   };
+}
+
+export interface ReportTemplateOption {
+  id: string;
+  versionId?: string;
+  value: string;
+  name: string;
+  kind: "builtin" | "custom";
 }
 
 export interface FinalizeReportResult {

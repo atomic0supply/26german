@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
@@ -12,11 +12,18 @@ import {
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { ACTION_OPTIONS, ATTENDEE_OPTIONS, DAMAGE_OPTIONS, PHOTO_SLOTS, TECHNIQUE_OPTIONS, TEMPLATE_OPTIONS } from "../constants";
+import {
+  ACTION_OPTIONS,
+  ATTENDEE_OPTIONS,
+  DAMAGE_OPTIONS,
+  PHOTO_SLOTS,
+  TECHNIQUE_OPTIONS,
+  TEMPLATE_OPTIONS_BY_ID
+} from "../constants";
 import { db, functions, storage } from "../firebase";
 import { normalizeReportData } from "../lib/firestore";
 import { validateReportForFinalize } from "../lib/validation";
-import { ClientData, FinalizeReportResult, ReportData } from "../types";
+import { ClientData, FinalizeReportResult, ReportData, TemplateFieldSchema, TemplateVersion } from "../types";
 import { SignaturePad } from "./SignaturePad";
 
 interface ReportEditorProps {
@@ -38,8 +45,12 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
-  const [previewBlobUrl, setPreviewBlobUrl] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [clients, setClients] = useState<ClientData[]>([]);
+  const [customTemplateVersion, setCustomTemplateVersion] = useState<TemplateVersion | null>(null);
+  const previewBlobUrlRef = useRef("");
+  const previewRequestIdRef = useRef(0);
+  const templatePreviewInitRef = useRef<string | null>(null);
 
   const reportRef = useMemo(() => doc(db, "reports", reportId), [reportId]);
 
@@ -91,13 +102,75 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
 
   useEffect(() => {
     return () => {
-      if (previewBlobUrl) {
-        URL.revokeObjectURL(previewBlobUrl);
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current);
       }
     };
-  }, [previewBlobUrl]);
+  }, []);
+
+  useEffect(() => {
+    if (!report?.templateRef || !report.templateVersionRef) {
+      setCustomTemplateVersion(null);
+      return;
+    }
+
+    const templateVersionRef = doc(db, `templates/${report.templateRef}/versions/${report.templateVersionRef}`);
+    const unsubscribe = onSnapshot(
+      templateVersionRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setCustomTemplateVersion(null);
+          return;
+        }
+
+        setCustomTemplateVersion({
+          id: snapshot.id,
+          ...(snapshot.data() as Omit<TemplateVersion, "id">)
+        });
+      },
+      () => {
+        setCustomTemplateVersion(null);
+      }
+    );
+
+    return unsubscribe;
+  }, [report?.templateRef, report?.templateVersionRef]);
 
   const readOnly = saving || !isOnline || report?.status === "finalized";
+
+  const customDynamicFields = useMemo(
+    () =>
+      (customTemplateVersion?.fieldSchema ?? []).filter(
+        (field) => field.source === "dynamic"
+      ),
+    [customTemplateVersion]
+  );
+
+  const customAssetFields = useMemo(
+    () =>
+      (customTemplateVersion?.fieldSchema ?? []).filter(
+        (field) => field.source === "image"
+      ),
+    [customTemplateVersion]
+  );
+
+  const customSignatureFields = useMemo(
+    () =>
+      (customTemplateVersion?.fieldSchema ?? []).filter(
+        (field) => field.source === "signature"
+      ),
+    [customTemplateVersion]
+  );
+
+  const requiredTemplateFields = useMemo(() => {
+    if (report?.brandTemplateId === "custom") {
+      return customDynamicFields
+        .filter((field) => field.required)
+        .map((field) => `templateFields.${field.id}`);
+    }
+
+    return report ? (TEMPLATE_OPTIONS_BY_ID[report.brandTemplateId]?.requiredTemplateFields ?? []) : [];
+  }, [customDynamicFields, report]);
 
   const updateReport = (updater: (previous: ReportData) => ReportData) => {
     setReport((previous) => {
@@ -134,6 +207,48 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
         signedAt: new Date().toISOString()
       }
     };
+  };
+
+  const uploadTemplateAsset = async (field: TemplateFieldSchema, file?: File) => {
+    if (!report || !file) {
+      return;
+    }
+
+    if (!isOnline) {
+      setError("Offline: Datei-Upload ist nur online möglich.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `report-template-assets/${reportId}/${field.id}-${safeName}`;
+      const assetRef = ref(storage, storagePath);
+
+      await uploadBytes(assetRef, file, { contentType: file.type || "application/octet-stream" });
+      const downloadUrl = await getDownloadURL(assetRef);
+
+      updateReport((previous) => ({
+        ...previous,
+        templateAssetPaths: {
+          ...(previous.templateAssetPaths ?? {}),
+          [field.id]: storagePath
+        },
+        templateAssetUrls: {
+          ...(previous.templateAssetUrls ?? {}),
+          [field.id]: downloadUrl
+        }
+      }));
+
+      setNotice(`Asset für ${field.label} hochgeladen.`);
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : "Asset konnte nicht hochgeladen werden";
+      setError(message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const persistReport = async (showNotice = true): Promise<ReportData | null> => {
@@ -262,7 +377,7 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       return;
     }
 
-    const validationErrors = validateReportForFinalize(persisted);
+    const validationErrors = validateReportForFinalize(persisted, requiredTemplateFields);
     if (validationErrors.length > 0) {
       setError(validationErrors.join(" "));
       return;
@@ -275,6 +390,13 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       const callable = httpsCallable<{ reportId: string }, FinalizeReportResult>(functions, "finalizeReport");
       const result = await callable({ reportId });
       setNotice(`Bericht finalisiert am ${new Date(result.data.finalizedAt).toLocaleString("de-DE")}`);
+      previewRequestIdRef.current += 1;
+      setPreviewLoading(false);
+
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current);
+        previewBlobUrlRef.current = "";
+      }
       setPreviewUrl(result.data.pdfUrl);
 
       const latest = await getDoc(reportRef);
@@ -295,7 +417,9 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       return;
     }
 
-    setSaving(true);
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    setPreviewLoading(true);
     setError("");
 
     try {
@@ -305,8 +429,13 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       >(functions, "previewPdf");
       const result = await callable({ reportId });
 
-      if (previewBlobUrl) {
-        URL.revokeObjectURL(previewBlobUrl);
+      if (requestId !== previewRequestIdRef.current) {
+        return;
+      }
+
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current);
+        previewBlobUrlRef.current = "";
       }
 
       if (result.data.previewBase64) {
@@ -318,7 +447,7 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
         }
         const blob = new Blob([bytes], { type: mimeType });
         const objectUrl = URL.createObjectURL(blob);
-        setPreviewBlobUrl(objectUrl);
+        previewBlobUrlRef.current = objectUrl;
         setPreviewUrl(objectUrl);
       } else if (result.data.previewUrl) {
         setPreviewUrl(result.data.previewUrl);
@@ -331,9 +460,31 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       const message = previewError instanceof Error ? previewError.message : "Vorschau konnte nicht erzeugt werden";
       setError(message);
     } finally {
-      setSaving(false);
+      if (requestId === previewRequestIdRef.current) {
+        setPreviewLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!report) {
+      return;
+    }
+
+    if (templatePreviewInitRef.current === null) {
+      templatePreviewInitRef.current = report.brandTemplateId;
+      return;
+    }
+
+    if (templatePreviewInitRef.current === report.brandTemplateId) {
+      return;
+    }
+
+    templatePreviewInitRef.current = report.brandTemplateId;
+    if (report.status !== "finalized" && isOnline) {
+      void previewPdf();
+    }
+  }, [report?.brandTemplateId, report?.status, isOnline]);
 
   const sendPdfByEmail = async () => {
     if (!report) {
@@ -405,6 +556,21 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
     );
   }
 
+  if (report.brandTemplateId !== "custom") {
+    return (
+      <main className="container stack">
+        <button type="button" className="ghost" onClick={onBack}>
+          Zurück
+        </button>
+        <section className="card stack">
+          <h2>Legacy-Bericht</h2>
+          <p>Dieser Bericht gehört noch zum alten Vorlagen-Workflow.</p>
+          <p>Die App arbeitet jetzt nur noch mit veröffentlichten PDF-Vorlagen aus dem visuellen Editor.</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="container stack">
       {!isOnline && <div className="offline-banner">Offline: Diese v1-App unterstützt nur Online-Bearbeitung.</div>}
@@ -417,8 +583,8 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
           <button type="button" className="ghost" disabled={readOnly} onClick={() => void persistReport()}>
             Speichern
           </button>
-          <button type="button" className="ghost" disabled={readOnly} onClick={previewPdf}>
-            PDF Vorschau
+          <button type="button" className="ghost" disabled={readOnly || previewLoading} onClick={previewPdf}>
+            {previewLoading ? "Erzeuge Vorschau..." : "PDF Vorschau"}
           </button>
           <button type="button" disabled={readOnly} onClick={finalizeReport}>
             Finalisieren
@@ -438,9 +604,15 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       {notice && <p className="notice">{notice}</p>}
 
       {previewUrl && (
-        <p>
-          PDF: <a href={previewUrl} target="_blank" rel="noreferrer">anzeigen</a>
-        </p>
+        <section className="card stack">
+          <h2>PDF Vorschau</h2>
+          <p>
+            <a href={previewUrl} target="_blank" rel="noreferrer">Im neuen Tab öffnen</a>
+          </p>
+          <object className="pdf-preview-frame" data={previewUrl} type="application/pdf">
+            <p>Der Browser konnte die PDF Vorschau nicht direkt anzeigen.</p>
+          </object>
+        </section>
       )}
 
       <section className="card stack">
@@ -448,22 +620,7 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
         <div className="grid two">
           <label>
             Vorlage
-            <select
-              value={report.brandTemplateId}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  brandTemplateId: event.target.value as ReportData["brandTemplateId"]
-                }))
-              }
-            >
-              {TEMPLATE_OPTIONS.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name}
-                </option>
-              ))}
-            </select>
+            <input value={report.templateName ?? "Custom Template"} disabled />
           </label>
 
           <label>
@@ -574,6 +731,141 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
           </label>
         </div>
       </section>
+
+      {customTemplateVersion && (
+        <section className="card stack">
+          <h2>Dynamische PDF-Felder</h2>
+          <p>Diese Eingaben stammen direkt aus der veröffentlichten Template-Version.</p>
+
+          <div className="grid two">
+            {customDynamicFields
+              .filter((field) => field.type === "text" || field.type === "dropdown")
+              .map((field) => (
+                <label key={field.id}>
+                  {field.label}
+                  {field.type === "dropdown" ? (
+                    <select
+                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          templateFields: {
+                            ...previous.templateFields,
+                            [field.id]: event.target.value
+                          }
+                        }))
+                      }
+                    >
+                      <option value="">Bitte auswählen</option>
+                      {field.options.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          templateFields: {
+                            ...previous.templateFields,
+                            [field.id]: event.target.value
+                          }
+                        }))
+                      }
+                    />
+                  )}
+                  {field.helpText && <small>{field.helpText}</small>}
+                </label>
+              ))}
+          </div>
+
+          {customDynamicFields
+            .filter((field) => field.type === "textarea")
+            .map((field) => (
+              <label key={field.id}>
+                {field.label}
+                <textarea
+                  value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      templateFields: {
+                        ...previous.templateFields,
+                        [field.id]: event.target.value
+                      }
+                    }))
+                  }
+                />
+                {field.helpText && <small>{field.helpText}</small>}
+              </label>
+            ))}
+
+          {customDynamicFields.some((field) => field.type === "checkbox") && (
+            <div className="checkbox-grid">
+              {customDynamicFields
+                .filter((field) => field.type === "checkbox")
+                .map((field) => (
+                  <label key={field.id} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(report.templateFields[field.id])}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          templateFields: {
+                            ...previous.templateFields,
+                            [field.id]: event.target.checked
+                          }
+                        }))
+                      }
+                    />
+                    {field.label}
+                  </label>
+                ))}
+            </div>
+          )}
+
+          {customAssetFields.length > 0 && (
+            <div className="template-asset-grid">
+              {customAssetFields.map((field) => (
+                <div key={field.id} className="photo-slot">
+                  <h3>{field.label}</h3>
+                  {field.helpText && <p>{field.helpText}</p>}
+                  {report.templateAssetUrls?.[field.id] ? (
+                    <a href={report.templateAssetUrls[field.id]} target="_blank" rel="noreferrer">
+                      Asset öffnen
+                    </a>
+                  ) : (
+                    <p>Noch kein Asset hochgeladen.</p>
+                  )}
+                  <label>
+                    Datei hochladen
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={readOnly}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        void uploadTemplateAsset(field, event.target.files?.[0])
+                      }
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {customSignatureFields.length > 0 && (
+            <p>Die Signaturfelder dieser Vorlage werden aus der Techniker-Signatur unten befüllt.</p>
+          )}
+        </section>
+      )}
 
       <section className="card stack">
         <h2>Kontakte</h2>

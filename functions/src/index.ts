@@ -8,7 +8,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { sha256 } from "./hash";
 import { DEFAULT_TEMPLATES } from "./templates";
-import { ClientData, ReportData, TemplateConfig } from "./types";
+import { BuiltinTemplateId, ClientData, ReportData, TemplateConfig, TemplateSummary, TemplateVersion } from "./types";
 import { validateReportForFinalize } from "./validation";
 
 initializeApp();
@@ -31,7 +31,7 @@ const getBucket = () => {
       const fromEnv = process.env.FIREBASE_STORAGE_BUCKET;
       bucket = fromEnv ? storage.bucket(fromEnv) : storage.bucket();
     } catch (error) {
-      logger.warn("Cloud Storage bucket is not configured; images in preview will be skipped.", {
+      logger.warn("Cloud Storage bucket is not configured; template preview/finalize will fail.", {
         error: error instanceof Error ? error.message : String(error)
       });
       bucket = null;
@@ -48,12 +48,12 @@ const requireBucket = () => {
   return storageBucket;
 };
 
-let renderReportPdfPromise: Promise<typeof import("./pdf").renderReportPdf> | undefined;
-const getRenderReportPdf = async () => {
-  if (!renderReportPdfPromise) {
-    renderReportPdfPromise = import("./pdf").then((module) => module.renderReportPdf);
+let pdfModulePromise: Promise<typeof import("./pdf")> | undefined;
+const getPdfModule = async () => {
+  if (!pdfModulePromise) {
+    pdfModulePromise = import("./pdf");
   }
-  return renderReportPdfPromise;
+  return pdfModulePromise;
 };
 
 type Mailer = {
@@ -85,7 +85,8 @@ const getMailer = async (): Promise<Mailer | null> => {
 
 const getTemplate = async (templateId: string): Promise<TemplateConfig> => {
   const db = getDb();
-  const fallback = DEFAULT_TEMPLATES[templateId] ?? DEFAULT_TEMPLATES.svt;
+  const fallbackId = (templateId in DEFAULT_TEMPLATES ? templateId : "svt") as BuiltinTemplateId;
+  const fallback = DEFAULT_TEMPLATES[fallbackId];
 
   const templateSnap = await db.doc(`templates/${templateId}`).get();
   if (!templateSnap.exists) {
@@ -98,12 +99,24 @@ const getTemplate = async (templateId: string): Promise<TemplateConfig> => {
   };
 };
 
-const assertTechnician = async (uid: string) => {
+const assertActiveUser = async (uid: string) => {
   const db = getDb();
   const userSnap = await db.doc(`users/${uid}`).get();
   const data = userSnap.data();
+  const role = String(data?.role ?? "");
 
-  if (!userSnap.exists || data?.role !== "technician" || data?.active !== true) {
+  if (!userSnap.exists || data?.active !== true || !["technician", "admin", "office"].includes(role)) {
+    throw new HttpsError("permission-denied", "UNAUTHORIZED");
+  }
+};
+
+const assertTemplateAdmin = async (uid: string) => {
+  const db = getDb();
+  const userSnap = await db.doc(`users/${uid}`).get();
+  const data = userSnap.data();
+  const role = String(data?.role ?? "");
+
+  if (!userSnap.exists || data?.active !== true || !["admin", "office"].includes(role)) {
     throw new HttpsError("permission-denied", "UNAUTHORIZED");
   }
 };
@@ -112,6 +125,59 @@ const assertOwnReport = (uid: string, report: ReportData) => {
   if (report.createdBy !== uid) {
     throw new HttpsError("permission-denied", "UNAUTHORIZED");
   }
+};
+
+const toPdfRenderError = (error: unknown): HttpsError => {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.startsWith("MAPPED_FIELD_NOT_FOUND:")) {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message.startsWith("MAPPED_OPTION_NOT_FOUND:")) {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message.startsWith("TEMPLATE_PDF_NOT_FOUND:")) {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message === "STORAGE_BUCKET_NOT_CONFIGURED") {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message.startsWith("IMAGE_FIELD_NOT_SUPPORTED:")) {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  return new HttpsError("internal", "PDF_RENDER_FAILED");
+};
+
+const getTemplateVersion = async (templateRef: string, versionRef: string): Promise<TemplateVersion> => {
+  const db = getDb();
+  const templateVersionSnap = await db.doc(`templates/${templateRef}/versions/${versionRef}`).get();
+  if (!templateVersionSnap.exists) {
+    throw new HttpsError("failed-precondition", "TEMPLATE_VERSION_NOT_FOUND");
+  }
+
+  return {
+    id: templateVersionSnap.id,
+    ...(templateVersionSnap.data() as Omit<TemplateVersion, "id">)
+  };
+};
+
+const getReportRenderSource = async (report: ReportData) => {
+  if (report.templateRef && report.templateVersionRef) {
+    return {
+      kind: "custom" as const,
+      version: await getTemplateVersion(report.templateRef, report.templateVersionRef)
+    };
+  }
+
+  return {
+    kind: "fixed" as const,
+    template: await getTemplate(report.brandTemplateId)
+  };
 };
 
 export const finalizeReport = onCall(async (request) => {
@@ -126,7 +192,7 @@ export const finalizeReport = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "VALIDATION_FAILED: reportId fehlt");
   }
 
-  await assertTechnician(uid);
+  await assertActiveUser(uid);
 
   const reportRef = db.doc(`reports/${reportId}`);
   const reportSnap = await reportRef.get();
@@ -142,18 +208,29 @@ export const finalizeReport = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "ALREADY_FINALIZED");
   }
 
-  const validationErrors = validateReportForFinalize(report);
+  const renderSource = await getReportRenderSource(report);
+  const requiredTemplateFields = renderSource.kind === "fixed"
+    ? renderSource.template.requiredTemplateFields
+    : renderSource.version.fieldSchema
+        .filter((field) => field.required && (field.type === "text" || field.type === "textarea" || field.type === "dropdown" || field.type === "checkbox"))
+        .map((field) => `templateFields.${field.id}`);
+  const validationErrors = validateReportForFinalize(report, requiredTemplateFields);
   if (validationErrors.length > 0) {
     throw new HttpsError("invalid-argument", "VALIDATION_FAILED", {
       errors: validationErrors
     });
   }
 
-  const template = await getTemplate(report.brandTemplateId);
-  const renderReportPdf = await getRenderReportPdf();
-  const previewBucket = getBucket();
-  const pdfBytes = await renderReportPdf(report, template, previewBucket);
+  const pdfModule = await getPdfModule();
   const bucket = requireBucket();
+  let pdfBytes: Uint8Array;
+  try {
+    pdfBytes = renderSource.kind === "fixed"
+      ? await pdfModule.renderReportPdf(report, renderSource.template, bucket, { flatten: true })
+      : await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: true });
+  } catch (error) {
+    throw toPdfRenderError(error);
+  }
 
   const pdfPath = `report-pdfs/${reportId}/final.pdf`;
   await bucket.file(pdfPath).save(Buffer.from(pdfBytes), {
@@ -206,7 +283,7 @@ export const previewPdf = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "VALIDATION_FAILED: reportId fehlt");
   }
 
-  await assertTechnician(uid);
+  await assertActiveUser(uid);
 
   const reportRef = db.doc(`reports/${reportId}`);
   const reportSnap = await reportRef.get();
@@ -218,10 +295,17 @@ export const previewPdf = onCall(async (request) => {
   const report = reportSnap.data() as ReportData;
   assertOwnReport(uid, report);
 
-  const template = await getTemplate(report.brandTemplateId);
-  const renderReportPdf = await getRenderReportPdf();
-  const previewBucket = getBucket();
-  const pdfBytes = await renderReportPdf(report, template, previewBucket);
+  const renderSource = await getReportRenderSource(report);
+  const pdfModule = await getPdfModule();
+  const bucket = requireBucket();
+  let pdfBytes: Uint8Array;
+  try {
+    pdfBytes = renderSource.kind === "fixed"
+      ? await pdfModule.renderReportPdf(report, renderSource.template, bucket, { flatten: false })
+      : await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: false });
+  } catch (error) {
+    throw toPdfRenderError(error);
+  }
 
   logger.info("Report preview generated", { reportId, uid });
   return {
@@ -243,7 +327,7 @@ export const sendReportEmail = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "VALIDATION_FAILED: reportId fehlt");
   }
 
-  await assertTechnician(uid);
+  await assertActiveUser(uid);
 
   const reportRef = db.doc(`reports/${reportId}`);
   const reportSnap = await reportRef.get();
@@ -332,4 +416,81 @@ export const sendReportEmail = onCall(async (request) => {
     recipient: client.email,
     sentAt
   };
+});
+
+export const publishTemplateVersion = onCall(async (request) => {
+  const db = getDb();
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  const templateId = String(request.data?.templateId ?? "").trim();
+  const versionId = String(request.data?.versionId ?? "").trim();
+  if (!templateId || !versionId) {
+    throw new HttpsError("invalid-argument", "VALIDATION_FAILED: templateId/versionId fehlt");
+  }
+
+  await assertTemplateAdmin(uid);
+
+  const templateRef = db.doc(`templates/${templateId}`);
+  const versionRef = db.doc(`templates/${templateId}/versions/${versionId}`);
+  const [templateSnap, versionSnap] = await Promise.all([templateRef.get(), versionRef.get()]);
+
+  if (!templateSnap.exists || !versionSnap.exists) {
+    throw new HttpsError("not-found", "TEMPLATE_NOT_FOUND");
+  }
+
+  const template = templateSnap.data() as TemplateSummary;
+  const version = versionSnap.data() as TemplateVersion;
+  if (template.createdBy !== uid || version.createdBy !== uid) {
+    throw new HttpsError("permission-denied", "UNAUTHORIZED");
+  }
+
+  if (version.status === "published") {
+    throw new HttpsError("failed-precondition", "VERSION_ALREADY_PUBLISHED");
+  }
+
+  if (!version.basePdfPath || !Array.isArray(version.fieldSchema) || version.fieldSchema.length === 0) {
+    throw new HttpsError("failed-precondition", "TEMPLATE_SCHEMA_INVALID");
+  }
+
+  const bucket = requireBucket();
+  const [basePdf] = await bucket.file(version.basePdfPath).download().catch(() => {
+    throw new HttpsError("failed-precondition", "TEMPLATE_PDF_NOT_FOUND");
+  });
+
+  try {
+    const pdfModule = await getPdfModule();
+    const editablePdf = await pdfModule.createEditablePdfFromSchema(basePdf, version.fieldSchema);
+    const editablePdfPath = `templates/${templateId}/${versionId}/editable.pdf`;
+    await bucket.file(editablePdfPath).save(Buffer.from(editablePdf), {
+      contentType: "application/pdf",
+      metadata: {
+        cacheControl: "private, max-age=0, no-cache"
+      }
+    });
+
+    const now = new Date().toISOString();
+    await Promise.all([
+      versionRef.update({
+        editablePdfPath,
+        status: "published",
+        publishedAt: now,
+        publishedBy: uid
+      }),
+      templateRef.update({
+        publishedVersionId: versionId,
+        status: "published",
+        updatedAt: FieldValue.serverTimestamp()
+      })
+    ]);
+
+    return {
+      editablePdfPath,
+      publishedAt: now
+    };
+  } catch (error) {
+    throw toPdfRenderError(error);
+  }
 });

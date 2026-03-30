@@ -15,6 +15,22 @@ service cloud.firestore {
         && userDoc().data.active == true;
     }
 
+    function isAppUser() {
+      return isSignedIn()
+        && userDoc().data.active == true
+        && (
+          userDoc().data.role == 'technician'
+          || userDoc().data.role == 'admin'
+          || userDoc().data.role == 'office'
+        );
+    }
+
+    function isTemplateAdmin() {
+      return isSignedIn()
+        && userDoc().data.active == true
+        && (userDoc().data.role == 'admin' || userDoc().data.role == 'office');
+    }
+
     function reportDoc(reportId) {
       return get(/databases/$(database)/documents/reports/$(reportId));
     }
@@ -41,39 +57,48 @@ service cloud.firestore {
     }
 
     match /templates/{templateId} {
-      allow read: if isTechnician();
-      allow create, update, delete: if false;
+      allow read: if isTechnician() || isTemplateAdmin();
+      allow create: if isTemplateAdmin() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isTemplateAdmin() && resource.data.createdBy == request.auth.uid;
+      allow delete: if false;
+
+      match /versions/{versionId} {
+        allow read: if isTechnician() || isTemplateAdmin();
+        allow create: if isTemplateAdmin() && request.resource.data.createdBy == request.auth.uid;
+        allow update: if isTemplateAdmin() && resource.data.createdBy == request.auth.uid;
+        allow delete: if false;
+      }
     }
 
     match /clients/{clientId} {
-      allow read: if isTechnician() && resource.data.createdBy == request.auth.uid;
-      allow create: if isTechnician() && request.resource.data.createdBy == request.auth.uid;
-      allow update: if isTechnician()
+      allow read: if isAppUser() && resource.data.createdBy == request.auth.uid;
+      allow create: if isAppUser() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAppUser()
         && ownsClient(clientId)
         && request.resource.data.createdBy == resource.data.createdBy;
-      allow delete: if isTechnician() && ownsClient(clientId);
+      allow delete: if isAppUser() && ownsClient(clientId);
     }
 
     match /reports/{reportId} {
-      allow create: if isTechnician()
+      allow create: if isAppUser()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'draft';
 
-      allow read: if isTechnician() && resource.data.createdBy == request.auth.uid;
+      allow read: if isAppUser() && resource.data.createdBy == request.auth.uid;
 
-      allow update: if isTechnician()
+      allow update: if isAppUser()
         && resource.data.createdBy == request.auth.uid
         && resource.data.status == 'draft'
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.status == 'draft';
 
-      allow delete: if isTechnician()
+      allow delete: if isAppUser()
         && resource.data.createdBy == request.auth.uid
         && resource.data.status == 'draft';
 
       match /photos/{photoId} {
-        allow read: if isTechnician() && ownsReport(reportId);
-        allow create, update: if isTechnician() && ownsReport(reportId) && reportIsDraft(reportId);
+        allow read: if isAppUser() && ownsReport(reportId);
+        allow create, update: if isAppUser() && ownsReport(reportId) && reportIsDraft(reportId);
         allow delete: if false;
       }
     }

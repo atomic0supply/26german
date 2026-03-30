@@ -11,15 +11,17 @@ import {
   where
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { Language, localeForLanguage, translate } from "../i18n";
 import { toIsoString } from "../lib/firestore";
 import { ClientData } from "../types";
 
 interface ClientManagerProps {
   uid: string;
   isOnline: boolean;
+  language: Language;
 }
 
-export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
+export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) => {
   const [clients, setClients] = useState<ClientData[]>([]);
   const [editingClientId, setEditingClientId] = useState("");
   const [editingDraft, setEditingDraft] = useState<{ email: string; phone: string; location: string }>({
@@ -34,6 +36,8 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const locale = localeForLanguage(language);
 
   useEffect(() => {
     const clientsQuery = query(collection(db, "clients"), where("createdBy", "==", uid));
@@ -52,9 +56,9 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
               createdBy: String(data.createdBy ?? uid),
               createdAt: toIsoString(data.createdAt),
               updatedAt: toIsoString(data.updatedAt)
-            } satisfies ClientData;
-          })
-          .sort((left, right) => left.email.localeCompare(right.email, "de"));
+          } satisfies ClientData;
+        })
+          .sort((left, right) => left.email.localeCompare(right.email, locale));
 
         setClients(next);
         setLoading(false);
@@ -66,18 +70,18 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
     );
 
     return unsubscribe;
-  }, [uid]);
+  }, [uid, locale]);
 
   const createClient = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (!isOnline) {
-      setError("Offline: Kunden können nur online gespeichert werden.");
+      setError(t("Offline: Kunden können nur online gespeichert werden.", "Sin conexión: solo puedes guardar clientes en línea."));
       return;
     }
 
     if (!email.trim() || !location.trim()) {
-      setError("Bitte mindestens E-Mail und Standort ausfüllen.");
+      setError(t("Bitte mindestens E-Mail und Standort ausfüllen.", "Rellena al menos correo y ubicación."));
       return;
     }
 
@@ -98,9 +102,9 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
       setEmail("");
       setPhone("");
       setLocation("");
-      setNotice("Kunde gespeichert.");
+      setNotice(t("Kunde gespeichert.", "Cliente guardado."));
     } catch (createError) {
-      const message = createError instanceof Error ? createError.message : "Kunde konnte nicht gespeichert werden";
+      const message = createError instanceof Error ? createError.message : t("Kunde konnte nicht gespeichert werden", "No se pudo guardar el cliente");
       setError(message);
     } finally {
       setSaving(false);
@@ -109,7 +113,7 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
 
   const saveClient = async (client: ClientData) => {
     if (!isOnline) {
-      setError("Offline: Kundenbearbeitung ist nur online möglich.");
+      setError(t("Offline: Kundenbearbeitung ist nur online möglich.", "Sin conexión: editar clientes solo es posible en línea."));
       return;
     }
 
@@ -124,10 +128,10 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
         location: client.location.trim(),
         updatedAt: serverTimestamp()
       });
-      setNotice("Kunde aktualisiert.");
+      setNotice(t("Kunde aktualisiert.", "Cliente actualizado."));
       setEditingClientId("");
     } catch (updateError) {
-      const message = updateError instanceof Error ? updateError.message : "Kunde konnte nicht aktualisiert werden";
+      const message = updateError instanceof Error ? updateError.message : t("Kunde konnte nicht aktualisiert werden", "No se pudo actualizar el cliente");
       setError(message);
     } finally {
       setSaving(false);
@@ -136,11 +140,11 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
 
   const removeClient = async (clientId: string) => {
     if (!isOnline) {
-      setError("Offline: Löschen von Kunden ist nur online möglich.");
+      setError(t("Offline: Löschen von Kunden ist nur online möglich.", "Sin conexión: eliminar clientes solo es posible en línea."));
       return;
     }
 
-    const confirmed = window.confirm("Kunden wirklich löschen?");
+    const confirmed = window.confirm(t("Kunden wirklich löschen?", "¿Seguro que quieres eliminar este cliente?"));
     if (!confirmed) {
       return;
     }
@@ -151,12 +155,12 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
 
     try {
       await deleteDoc(doc(db, "clients", clientId));
-      setNotice("Kunde gelöscht.");
+      setNotice(t("Kunde gelöscht.", "Cliente eliminado."));
       if (editingClientId === clientId) {
         setEditingClientId("");
       }
     } catch (deleteError) {
-      const message = deleteError instanceof Error ? deleteError.message : "Kunde konnte nicht gelöscht werden";
+      const message = deleteError instanceof Error ? deleteError.message : t("Kunde konnte nicht gelöscht werden", "No se pudo eliminar el cliente");
       setError(message);
     } finally {
       setSaving(false);
@@ -192,8 +196,13 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
 
   return (
     <section className="card stack">
-      <h2>Kundenverwaltung</h2>
-      <p>E-Mail, Telefon und Standort speichern, damit der PDF-Bericht an den richtigen Kunden gesendet werden kann.</p>
+      <h2>{t("Kundenverwaltung", "Gestión de clientes")}</h2>
+      <p>
+        {t(
+          "E-Mail, Telefon und Standort speichern, damit der PDF-Bericht an den richtigen Kunden gesendet werden kann.",
+          "Guarda correo, teléfono y ubicación para enviar el PDF al cliente correcto."
+        )}
+      </p>
 
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
@@ -201,18 +210,18 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
       <form className="stack" onSubmit={createClient}>
         <div className="grid three">
           <label>
-            E-Mail
+            {t("E-Mail", "Correo")}
             <input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="kunde@beispiel.de"
+              placeholder={t("kunde@beispiel.de", "cliente@ejemplo.com")}
               required
             />
           </label>
 
           <label>
-            Telefon
+            {t("Telefon", "Teléfono")}
             <input
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
@@ -221,30 +230,30 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
           </label>
 
           <label>
-            Standort
+            {t("Standort", "Ubicación")}
             <input
               value={location}
               onChange={(event) => setLocation(event.target.value)}
-              placeholder="Straße / Stadt"
+              placeholder={t("Straße / Stadt", "Calle / Ciudad")}
               required
             />
           </label>
         </div>
 
         <button type="submit" disabled={saving || !isOnline}>
-          {saving ? "Speichere..." : "Kunde hinzufügen"}
+          {saving ? t("Speichere...", "Guardando...") : t("Kunde hinzufügen", "Añadir cliente")}
         </button>
       </form>
 
-      {loading && <p>Lade Kunden...</p>}
-      {!loading && clients.length === 0 && <p>Noch keine Kunden gespeichert.</p>}
+      {loading && <p>{t("Lade Kunden...", "Cargando clientes...")}</p>}
+      {!loading && clients.length === 0 && <p>{t("Noch keine Kunden gespeichert.", "Todavía no hay clientes guardados.")}</p>}
 
       {clients.map((client) => (
         <div className="client-row" key={client.id}>
           {editingClientId === client.id ? (
             <>
               <label>
-                E-Mail
+                {t("E-Mail", "Correo")}
                 <input
                   type="email"
                   value={editingDraft.email}
@@ -253,7 +262,7 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
               </label>
 
               <label>
-                Telefon
+                {t("Telefon", "Teléfono")}
                 <input
                   value={editingDraft.phone}
                   onChange={(event) => updateEditingDraft("phone", event.target.value)}
@@ -261,7 +270,7 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
               </label>
 
               <label>
-                Standort
+                {t("Standort", "Ubicación")}
                 <input
                   value={editingDraft.location}
                   onChange={(event) => updateEditingDraft("location", event.target.value)}
@@ -270,30 +279,30 @@ export const ClientManager = ({ uid, isOnline }: ClientManagerProps) => {
 
               <div className="row">
                 <button type="button" className="ghost" disabled={saving || !isOnline} onClick={() => void saveEditingClient(client)}>
-                  Speichern
+                  {t("Speichern", "Guardar")}
                 </button>
                 <button type="button" className="ghost" disabled={saving} onClick={() => setEditingClientId("")}>
-                  Abbrechen
+                  {t("Abbrechen", "Cancelar")}
                 </button>
                 <button type="button" disabled={saving || !isOnline} onClick={() => void removeClient(client.id)}>
-                  Löschen
+                  {t("Löschen", "Eliminar")}
                 </button>
               </div>
             </>
           ) : (
             <>
               <div className="client-summary">
-                <p><strong>E-Mail:</strong> {client.email || "-"}</p>
-                <p><strong>Telefon:</strong> {client.phone || "-"}</p>
-                <p><strong>Standort:</strong> {client.location || "-"}</p>
+                <p><strong>{t("E-Mail", "Correo")}:</strong> {client.email || "-"}</p>
+                <p><strong>{t("Telefon", "Teléfono")}:</strong> {client.phone || "-"}</p>
+                <p><strong>{t("Standort", "Ubicación")}:</strong> {client.location || "-"}</p>
               </div>
 
               <div className="row">
                 <button type="button" className="ghost" onClick={() => startEditClient(client)}>
-                  Bearbeiten
+                  {t("Bearbeiten", "Editar")}
                 </button>
                 <button type="button" disabled={saving || !isOnline} onClick={() => void removeClient(client.id)}>
-                  Löschen
+                  {t("Löschen", "Eliminar")}
                 </button>
               </div>
             </>

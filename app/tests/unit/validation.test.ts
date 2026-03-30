@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { TEMPLATE_OPTIONS_BY_ID } from "../../src/constants";
 import { createDefaultReport } from "../../src/lib/defaultReport";
 import { validateReportForFinalize } from "../../src/lib/validation";
+import { BuiltinTemplateId } from "../../src/types";
 
 describe("validateReportForFinalize", () => {
   it("returns errors when required fields are missing", () => {
@@ -19,7 +21,12 @@ describe("validateReportForFinalize", () => {
     report.projectInfo.technicianName = "Max Mustermann";
     report.findings.summary = "Leckage im Vorlauf lokalisiert.";
     report.signature.storagePath = "report-signatures/report-1/technician.png";
+    report.templateFields.assignmentReference = "AB-1";
+    report.templateFields.insuranceName = "Versicherung A";
+    report.templateFields.claimNumber = "CL-9";
 
-    expect(validateReportForFinalize(report)).toEqual([]);
+    expect(
+      validateReportForFinalize(report, TEMPLATE_OPTIONS_BY_ID[report.brandTemplateId as BuiltinTemplateId].requiredTemplateFields)
+    ).toEqual([]);
   });
 });

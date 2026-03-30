@@ -1,4 +1,4 @@
-import { ReportData, ReportPhoto } from "../types";
+import { ReportData, ReportPhoto, TemplateFieldValue } from "../types";
 import { createDefaultReport } from "./defaultReport";
 
 export const toIsoString = (value: unknown): string => {
@@ -41,6 +41,39 @@ const normalizePhotos = (value: unknown): ReportPhoto[] => {
     .filter((item): item is ReportPhoto => item !== null);
 };
 
+const normalizeTemplateFields = (value: unknown): Record<string, TemplateFieldValue> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const next: Record<string, TemplateFieldValue> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, raw]) => {
+    if (typeof raw === "string" || typeof raw === "boolean") {
+      next[key] = raw;
+      return;
+    }
+
+    if (typeof raw === "number") {
+      next[key] = String(raw);
+    }
+  });
+
+  return next;
+};
+
+const normalizeStringMap = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((acc, [key, raw]) => {
+    if (raw !== undefined && raw !== null) {
+      acc[key] = String(raw);
+    }
+    return acc;
+  }, {});
+};
+
 export const normalizeReportData = (raw: unknown): ReportData => {
   const source = (raw ?? {}) as Partial<ReportData>;
   const fallback = createDefaultReport(source.createdBy ?? "");
@@ -79,6 +112,18 @@ export const normalizeReportData = (raw: unknown): ReportData => {
     techniques: Array.isArray(source.techniques) ? source.techniques : fallback.techniques,
     photos: normalizePhotos(source.photos),
     billing: { ...fallback.billing, ...(source.billing ?? {}) },
+    templateFields: {
+      ...fallback.templateFields,
+      ...normalizeTemplateFields(source.templateFields)
+    },
+    templateAssetPaths: {
+      ...(fallback.templateAssetPaths ?? {}),
+      ...normalizeStringMap(source.templateAssetPaths)
+    },
+    templateAssetUrls: {
+      ...(fallback.templateAssetUrls ?? {}),
+      ...normalizeStringMap(source.templateAssetUrls)
+    },
     signature: { ...fallback.signature, ...(source.signature ?? {}) },
     createdAt: toIsoString(source.createdAt ?? fallback.createdAt),
     updatedAt: toIsoString(source.updatedAt ?? fallback.updatedAt),

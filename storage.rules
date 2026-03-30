@@ -17,19 +17,44 @@ service firebase.storage {
       return ownsReport(reportId) && reportDoc(reportId).data.status == 'draft';
     }
 
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isTemplateAdmin() {
+      return isSignedIn()
+        && userDoc().data.active == true
+        && (userDoc().data.role == 'admin' || userDoc().data.role == 'office');
+    }
+
+    function isAppUser() {
+      return isSignedIn()
+        && userDoc().data.active == true
+        && (
+          userDoc().data.role == 'technician'
+          || userDoc().data.role == 'admin'
+          || userDoc().data.role == 'office'
+        );
+    }
+
     match /report-photos/{reportId}/{allPaths=**} {
-      allow read: if ownsReport(reportId);
-      allow write: if ownsDraftReport(reportId);
+      allow read: if isAppUser() && ownsReport(reportId);
+      allow write: if isAppUser() && ownsDraftReport(reportId);
     }
 
     match /report-signatures/{reportId}/{fileName} {
-      allow read: if ownsReport(reportId);
-      allow write: if ownsDraftReport(reportId) && fileName == 'technician.png';
+      allow read: if isAppUser() && ownsReport(reportId);
+      allow write: if isAppUser() && ownsDraftReport(reportId) && fileName == 'technician.png';
     }
 
     match /report-pdfs/{reportId}/{fileName} {
-      allow read: if ownsReport(reportId) && fileName == 'final.pdf';
+      allow read: if isAppUser() && ownsReport(reportId) && fileName == 'final.pdf';
       allow write: if false;
+    }
+
+    match /templates/{templateId}/{versionId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isTemplateAdmin();
     }
 
     match /{allPaths=**} {

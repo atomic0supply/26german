@@ -41,6 +41,20 @@ if (typeof window !== "undefined") {
 
 const useEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === "true";
 
+const hasRequiredConfig = [
+  firebaseConfig.apiKey,
+  firebaseConfig.authDomain,
+  firebaseConfig.projectId,
+  firebaseConfig.appId
+].every((value) => Boolean(value));
+
+export const firebaseConnectionInfo = {
+  projectId: firebaseConfig.projectId ?? "",
+  authDomain: firebaseConfig.authDomain ?? "",
+  usingEmulators: useEmulators,
+  hasRequiredConfig
+};
+
 if (useEmulators) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   connectFirestoreEmulator(db, "127.0.0.1", 8080);

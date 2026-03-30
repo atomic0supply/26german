@@ -230,6 +230,12 @@ button:disabled {
   gap: 0.7rem;
 }
 
+.template-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.7rem;
+}
+
 .photo-slot {
   border: 1px solid #d8e5f3;
   border-radius: 10px;
@@ -251,6 +257,42 @@ button:disabled {
 .client-summary {
   display: grid;
   gap: 0.2rem;
+}
+
+.pdf-preview-frame {
+  width: 100%;
+  min-height: 680px;
+  border: 1px solid #d4e2f1;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.settings-grid p {
+  margin: 0;
+}
+
+.connection-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.connection-pill.ok {
+  background: #dcf8ea;
+  color: #0f653d;
+}
+
+.connection-pill.warn {
+  background: #ffe6d6;
+  color: #8b3f11;
 }
 
 .signature-wrap {
@@ -290,6 +332,113 @@ button:disabled {
   font-weight: 700;
 }
 
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.template-card {
+  display: grid;
+  gap: 0.2rem;
+  text-align: left;
+  background: #fbfdff;
+  color: #173d63;
+  border: 1px solid #d5e3f2;
+}
+
+.template-card.active {
+  background: #0c4f82;
+  color: #f7fbff;
+}
+
+.template-card small {
+  opacity: 0.82;
+}
+
+.template-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.template-side {
+  position: sticky;
+  top: 1rem;
+}
+
+.toolbar-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.template-canvas-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.template-page-card {
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 31, 53, 0.08);
+  padding: 1rem;
+  overflow: auto;
+}
+
+.template-page-title {
+  font-weight: 700;
+  color: #173d63;
+  margin-bottom: 0.75rem;
+}
+
+.template-page-surface {
+  position: relative;
+  cursor: crosshair;
+  max-width: 100%;
+}
+
+.template-page-surface img {
+  display: block;
+  max-width: 100%;
+}
+
+.template-field {
+  position: absolute;
+  border: 2px solid #0c4f82;
+  background: rgba(12, 79, 130, 0.18);
+  color: #0d3558;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.2rem 0.25rem;
+  font-size: 0.75rem;
+  overflow: hidden;
+}
+
+.template-field.active {
+  border-color: #e56f00;
+  background: rgba(229, 111, 0, 0.2);
+}
+
+.template-field span {
+  pointer-events: none;
+  font-weight: 700;
+}
+
+.resize-handle {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 4px;
+  background: #0c4f82;
+  border: 0;
+  padding: 0;
+  align-self: end;
+  cursor: nwse-resize;
+}
+
 @media (max-width: 960px) {
   .grid.two,
   .grid.three {
@@ -303,5 +452,13 @@ button:disabled {
   .page-head {
     align-items: start;
     flex-direction: column;
+  }
+
+  .template-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .template-side {
+    position: static;
   }
 }

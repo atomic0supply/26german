@@ -1,12 +1,18 @@
 import { FormEvent, useState } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
+import { Language, translate } from "../i18n";
 
-export const LoginForm = () => {
+interface LoginFormProps {
+  language: Language;
+}
+
+export const LoginForm = ({ language }: LoginFormProps) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -16,7 +22,7 @@ export const LoginForm = () => {
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Anmeldung fehlgeschlagen";
+      const message = err instanceof Error ? err.message : t("Anmeldung fehlgeschlagen", "Error al iniciar sesión");
       setError(message);
     } finally {
       setLoading(false);
@@ -26,21 +32,21 @@ export const LoginForm = () => {
   return (
     <div className="auth-card">
       <h1>Einsatzbericht PWA</h1>
-      <p>Bitte mit Ihrem Techniker-Konto anmelden.</p>
+      <p>{t("Bitte mit Ihrem Techniker-Konto anmelden.", "Inicia sesión con tu cuenta de técnico.")}</p>
       <form onSubmit={handleSubmit} className="stack">
         <label>
-          E-Mail
+          {t("E-Mail", "Correo")}
           <input
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            placeholder="techniker@firma.de"
+            placeholder={t("techniker@firma.de", "tecnico@empresa.com")}
             required
           />
         </label>
 
         <label>
-          Passwort
+          {t("Passwort", "Contraseña")}
           <input
             type="password"
             value={password}
@@ -52,7 +58,7 @@ export const LoginForm = () => {
         {error && <p className="error">{error}</p>}
 
         <button type="submit" disabled={loading}>
-          {loading ? "Anmeldung..." : "Anmelden"}
+          {loading ? t("Anmeldung...", "Iniciando sesión...") : t("Anmelden", "Entrar")}
         </button>
       </form>
     </div>

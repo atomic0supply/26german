@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateReportForFinalize } from "../src/validation";
+import { DEFAULT_TEMPLATES } from "../src/templates";
 import { ReportData } from "../src/types";
 
 const baseReport = (): ReportData => ({
@@ -31,6 +32,11 @@ const baseReport = (): ReportData => ({
   techniques: ["Sichtprüfung"],
   photos: [],
   billing: { from: "08:00", to: "09:00", workingTimeHours: "1" },
+  templateFields: {
+    assignmentReference: "AB-10",
+    insuranceName: "MusterVersicherung",
+    claimNumber: "CL-9"
+  },
   signature: { technicianName: "Max", signedAt: "2026-03-27", storagePath: "report-signatures/id/technician.png" },
   status: "draft",
   createdBy: "uid-1"
@@ -49,5 +55,13 @@ describe("validateReportForFinalize", () => {
     const errors = validateReportForFinalize(report);
     expect(errors).toContain("Projektnummer ist erforderlich");
     expect(errors).toContain("Techniker-Signatur ist erforderlich");
+  });
+
+  it("enforces required template fields", () => {
+    const report = baseReport();
+    report.templateFields.claimNumber = "";
+
+    const errors = validateReportForFinalize(report, DEFAULT_TEMPLATES.svt.requiredTemplateFields);
+    expect(errors).toContain("templateFields.claimNumber ist erforderlich");
   });
 });

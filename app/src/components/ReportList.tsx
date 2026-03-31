@@ -21,6 +21,9 @@ import { createDefaultReport } from "../lib/defaultReport";
 import { toIsoString } from "../lib/firestore";
 import { ReportListItem, ReportTemplateOption, TemplateSummary, TemplateVersion, UserRole } from "../types";
 import { ClientManager } from "./ClientManager";
+import { AppShell } from "./layout/AppShell";
+import { ModuleHeader } from "./layout/ModuleHeader";
+import { SidebarNavItem } from "./layout/SidebarNav";
 import { SettingsPanel } from "./SettingsPanel";
 import { TemplateManager } from "./TemplateManager";
 
@@ -33,6 +36,144 @@ interface ReportListProps {
   language: Language;
   onLanguageChange: (language: Language) => void;
 }
+
+type PanelTFunction = (deValue: string, esValue: string) => string;
+
+interface NewReportPanelProps {
+  t: PanelTFunction;
+  templateOptions: ReportTemplateOption[];
+  templateSelection: string;
+  onTemplateSelectionChange: (value: string) => void;
+  templateName: string;
+  creating: boolean;
+  isOnline: boolean;
+  onCreateReport: () => void;
+}
+
+interface ReportsPanelProps {
+  t: PanelTFunction;
+  items: ReportListItem[];
+  locale: string;
+  loading: boolean;
+  isOnline: boolean;
+  deletingReportId: string;
+  onOpenReport: (id: string) => void;
+  onDeleteDraftReport: (item: ReportListItem) => void;
+}
+
+const NewReportPanel = ({
+  t,
+  templateOptions,
+  templateSelection,
+  onTemplateSelectionChange,
+  templateName,
+  creating,
+  isOnline,
+  onCreateReport
+}: NewReportPanelProps) => {
+  return (
+    <section className="surface module-panel stack">
+      <ModuleHeader
+        title={t("Neuer Bericht", "Nuevo informe")}
+        description={t("Lege einen Bericht direkt aus einer veröffentlichten Vorlage an.", "Crea un informe directamente desde una plantilla publicada.")}
+        badge={t("Schnellstart", "Inicio")}
+      />
+
+      {templateOptions.length === 0 ? (
+        <div className="empty-state">
+          <strong>{t("Keine veröffentlichte Vorlage verfügbar", "No hay plantillas publicadas")}</strong>
+          <p>
+            {t(
+              "Lege zuerst im Menü 'PDF Vorlagen' eine Vorlage an und veröffentliche sie.",
+              "Primero crea una plantilla en el menú 'Plantillas PDF' y publícala."
+            )}
+          </p>
+        </div>
+      ) : (
+        <div className="workspace-hero">
+          <div className="surface surface--soft stack">
+            <label>
+              {t("PDF-Vorlage", "Plantilla PDF")}
+              <select value={templateSelection} onChange={(event) => onTemplateSelectionChange(event.target.value)}>
+                {templateOptions.map((entry) => (
+                  <option key={entry.value} value={entry.value}>
+                    {entry.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="surface surface--inset">
+              <p className="surface__label">{t("Aktive Auswahl", "Selección activa")}</p>
+              <strong>{templateName}</strong>
+            </div>
+
+            <button type="button" onClick={onCreateReport} disabled={creating || !isOnline || !templateSelection}>
+              {creating ? t("Erstelle Bericht...", "Creando informe...") : t("Bericht anlegen", "Crear informe")}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
+const ReportsPanel = ({
+  t,
+  items,
+  locale,
+  loading,
+  isOnline,
+  deletingReportId,
+  onOpenReport,
+  onDeleteDraftReport
+}: ReportsPanelProps) => {
+  return (
+    <section className="surface module-panel stack">
+      <ModuleHeader
+        title={t("Meine Berichte", "Mis informes")}
+        description={t("Alle Entwürfe und finalisierten PDFs an einem Ort.", "Todos los borradores y PDFs finalizados en un solo lugar.")}
+        badge={String(items.length)}
+      />
+
+      {loading && <div className="empty-state">{t("Lade Berichte...", "Cargando informes...")}</div>}
+      {!loading && items.length === 0 && <div className="empty-state">{t("Noch keine Berichte vorhanden.", "Todavía no hay informes.")}</div>}
+
+      {!loading && items.length > 0 && (
+        <ul className="report-list">
+          {items.map((item) => (
+            <li key={item.id} className="report-item-row">
+              <div className="report-item">
+                <span>
+                  <strong>{item.projectNumber}</strong>
+                  <small>{item.objectLabel}</small>
+                  {item.templateName && <small>{item.templateName}</small>}
+                  <small>
+                    {t("Zuletzt geändert", "Última modificación")}: {new Date(item.updatedAt).toLocaleString(locale)}
+                  </small>
+                </span>
+                <span className={`status ${item.status}`}>{item.status === "draft" ? t("Entwurf", "Borrador") : t("Final", "Final")}</span>
+              </div>
+
+              <div className="row">
+                <button type="button" className="ghost" onClick={() => onOpenReport(item.id)}>
+                  {t("Bearbeiten", "Editar")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!isOnline || item.status !== "draft" || deletingReportId === item.id}
+                  onClick={() => onDeleteDraftReport(item)}
+                >
+                  {deletingReportId === item.id ? t("Lösche...", "Eliminando...") : t("Löschen", "Eliminar")}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+};
 
 export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, language, onLanguageChange }: ReportListProps) => {
   const [activeMenu, setActiveMenu] = useState<"neu" | "berichte" | "kunden" | "settings" | "templates">("neu");
@@ -47,6 +188,90 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
   const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
   const locale = localeForLanguage(language);
   const canManageTemplates = userRole === "admin" || userRole === "office";
+  const reportsCount = items.length;
+  const templatesCount = customTemplates.length;
+  const templateOptions = useMemo<ReportTemplateOption[]>(() => {
+    const custom = customTemplates.map((entry) => ({
+      id: entry.id,
+      versionId: entry.publishedVersionId,
+      value: `custom:${entry.id}:${entry.publishedVersionId}`,
+      name: `${entry.name} (${entry.brand})`,
+      kind: "custom" as const
+    }));
+    return custom;
+  }, [customTemplates]);
+
+  const navItems = useMemo<SidebarNavItem[]>(
+    () => [
+      {
+        id: "neu",
+        label: t("Neuer Bericht", "Nuevo informe"),
+        description: t("PDF-Vorlage auswählen und starten.", "Elige una plantilla PDF y empieza."),
+        badge: templateOptions.length > 0 ? String(templateOptions.length) : "0"
+      },
+      {
+        id: "berichte",
+        label: t("Meine Berichte", "Mis informes"),
+        description: t("Entwürfe und finale Berichte.", "Borradores e informes finales."),
+        badge: String(reportsCount)
+      },
+      {
+        id: "kunden",
+        label: t("Kunden", "Clientes"),
+        description: t("Kontakte und Adressen.", "Contactos y direcciones.")
+      },
+      {
+        id: "settings",
+        label: t("Einstellungen", "Ajustes"),
+        description: t("Sprache und Profil.", "Idioma y perfil.")
+      },
+      ...(canManageTemplates
+        ? [
+            {
+              id: "templates",
+              label: t("PDF Vorlagen", "Plantillas PDF"),
+              description: t("Editor und Veröffentlichung.", "Editor y publicación."),
+              badge: String(templatesCount)
+            }
+          ]
+        : [])
+    ],
+    [canManageTemplates, reportsCount, t, templatesCount, templateOptions.length]
+  );
+
+  const pageTitle = useMemo(() => {
+    switch (activeMenu) {
+      case "neu":
+        return t("Neuer Bericht", "Nuevo informe");
+      case "berichte":
+        return t("Berichte", "Informes");
+      case "kunden":
+        return t("Kunden", "Clientes");
+      case "settings":
+        return t("Einstellungen", "Ajustes");
+      case "templates":
+        return t("PDF Vorlagen", "Plantillas PDF");
+      default:
+        return t("Einsatzberichte", "Informes de servicio");
+    }
+  }, [activeMenu, t]);
+
+  const pageSubtitle = useMemo(() => {
+    switch (activeMenu) {
+      case "neu":
+        return t("Arbeitsbereich für neue Einsatzberichte.", "Espacio de trabajo para nuevos informes.");
+      case "berichte":
+        return t("Schnellübersicht über offene und finale Einsätze.", "Resumen rápido de informes abiertos y finalizados.");
+      case "kunden":
+        return t("Kontakte zentral verwalten.", "Gestiona contactos desde un único lugar.");
+      case "settings":
+        return t("Sprache und Oberfläche anpassen.", "Ajusta idioma e interfaz.");
+      case "templates":
+        return t("PDF-Vorlagen erstellen, versionieren und veröffentlichen.", "Crea, versiona y publica plantillas PDF.");
+      default:
+        return "";
+    }
+  }, [activeMenu, t]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -78,7 +303,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
           projectNumber: String((data.projectInfo as { projectNumber?: string } | undefined)?.projectNumber ?? "(ohne Nummer)"),
           objectLabel: String((data.projectInfo as { locationObject?: string } | undefined)?.locationObject ?? "(ohne Objekt)"),
           status: data.status === "finalized" ? "finalized" : "draft",
-          template: data.brandTemplateId === "custom" ? "custom" : "custom",
+          template: "custom",
           templateName: String(data.templateName ?? "Legacy Vorlage"),
           updatedAt: toIsoString(data.updatedAt)
         } as ReportListItem;
@@ -128,17 +353,6 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
       unsubscribe();
     };
   }, [uid]);
-
-  const templateOptions = useMemo<ReportTemplateOption[]>(() => {
-    const custom = customTemplates.map((entry) => ({
-      id: entry.id,
-      versionId: entry.publishedVersionId,
-      value: `custom:${entry.id}:${entry.publishedVersionId}`,
-      name: `${entry.name} (${entry.brand})`,
-      kind: "custom" as const
-    }));
-    return custom;
-  }, [customTemplates]);
 
   useEffect(() => {
     if (templateOptions.length === 0) {
@@ -252,130 +466,85 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
   };
 
   return (
-    <main className="container">
-      <header className="page-head">
-        <div>
-          <h1>{t("Einsatzberichte", "Informes de servicio")}</h1>
-          <p>{t("Neuer Workflow nur mit veröffentlichten PDF-Vorlagen.", "Nuevo flujo solo con plantillas PDF publicadas.")}</p>
-        </div>
-        <button type="button" className="ghost" onClick={logout}>
-          {t("Abmelden", "Cerrar sesión")}
-        </button>
-      </header>
-
-      <nav className="menu-tabs" aria-label={t("Hauptmenü", "Menú principal")}>
-        <button type="button" className={activeMenu === "neu" ? "tab active" : "tab"} onClick={() => setActiveMenu("neu")}>
-          {t("1. Neuer Bericht", "1. Nuevo informe")}
-        </button>
-        <button
-          type="button"
-          className={activeMenu === "berichte" ? "tab active" : "tab"}
-          onClick={() => setActiveMenu("berichte")}
-        >
-          {t("2. Meine Berichte", "2. Mis informes")}
-        </button>
-        <button
-          type="button"
-          className={activeMenu === "kunden" ? "tab active" : "tab"}
-          onClick={() => setActiveMenu("kunden")}
-        >
-          {t("3. Kunden", "3. Clientes")}
-        </button>
-        <button
-          type="button"
-          className={activeMenu === "settings" ? "tab active" : "tab"}
-          onClick={() => setActiveMenu("settings")}
-        >
-          {t("4. Einstellungen", "4. Ajustes")}
-        </button>
-        {canManageTemplates && (
-          <button
-            type="button"
-            className={activeMenu === "templates" ? "tab active" : "tab"}
-            onClick={() => setActiveMenu("templates")}
-          >
-            {t("5. PDF Vorlagen", "5. Plantillas PDF")}
-          </button>
+    <AppShell
+      brandTitle={t("Einsatzberichte", "Informes de servicio")}
+      brandSubtitle={t("Workbench für Berichte, Kunden und PDF-Vorlagen.", "Espacio de trabajo para informes, clientes y plantillas PDF.")}
+      pageTitle={pageTitle}
+      pageSubtitle={pageSubtitle}
+      language={language}
+      isOnline={isOnline}
+      navItems={navItems}
+      activeItem={activeMenu}
+      onSelect={(id) => setActiveMenu(id as typeof activeMenu)}
+      user={user}
+      userRole={userRole}
+      onLanguageChange={onLanguageChange}
+      onLogout={logout}
+    >
+      <div className="workspace-stack">
+        {(error || notice) && (
+          <section className="stack">
+            {error && <p className="notice-banner error">{error}</p>}
+            {notice && <p className="notice-banner notice">{notice}</p>}
+          </section>
         )}
-      </nav>
 
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
+        {activeMenu === "neu" && (
+          <NewReportPanel
+            t={t}
+            templateOptions={templateOptions}
+            templateSelection={templateSelection}
+            onTemplateSelectionChange={setTemplateSelection}
+            templateName={templateName}
+            creating={creating}
+            isOnline={isOnline}
+            onCreateReport={createReport}
+          />
+        )}
 
-      {activeMenu === "neu" && (
-        <section className="card stack">
-          <h2>{t("Neuer Bericht aus PDF-Vorlage", "Nuevo informe desde plantilla PDF")}</h2>
-          {templateOptions.length === 0 ? (
-            <p>
-              {t(
-                "Es gibt noch keine veröffentlichte PDF-Vorlage. Bitte zuerst im Menü 'PDF Vorlagen' eine Vorlage anlegen und veröffentlichen.",
-                "Todavía no hay ninguna plantilla PDF publicada. Primero crea y publica una en el menú 'Plantillas PDF'."
-              )}
-            </p>
-          ) : (
-            <>
-              <label>
-                {t("PDF-Vorlage", "Plantilla PDF")}
-                <select value={templateSelection} onChange={(event) => setTemplateSelection(event.target.value)}>
-                  {templateOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button type="button" onClick={createReport} disabled={creating || !isOnline || !templateSelection}>
-                {creating ? t("Erstelle Bericht...", "Creando informe...") : t(`Neuer Bericht (${templateName})`, `Nuevo informe (${templateName})`)}
-              </button>
-            </>
-          )}
-        </section>
-      )}
+        {activeMenu === "berichte" && (
+          <ReportsPanel
+            t={t}
+            items={items}
+            locale={locale}
+            loading={loading}
+            isOnline={isOnline}
+            deletingReportId={deletingReportId}
+            onOpenReport={onOpenReport}
+            onDeleteDraftReport={(item) => void deleteDraftReport(item)}
+          />
+        )}
 
-      {activeMenu === "berichte" && (
-        <section className="card stack">
-          <h2>{t("Meine Berichte", "Mis informes")}</h2>
-          {loading && <p>{t("Lade Berichte...", "Cargando informes...")}</p>}
-          {!loading && items.length === 0 && <p>{t("Noch keine Berichte vorhanden.", "Todavía no hay informes.")}</p>}
+        {activeMenu === "kunden" && (
+          <section className="surface module-panel stack">
+            <ModuleHeader
+              title={t("Kunden", "Clientes")}
+              description={t("Verwalte deine Kontakte an einem Ort.", "Gestiona tus contactos en un solo lugar.")}
+            />
+            <ClientManager uid={uid} isOnline={isOnline} language={language} />
+          </section>
+        )}
 
-          <ul className="report-list">
-            {items.map((item) => (
-              <li key={item.id} className="report-item-row">
-                <div className="report-item">
-                  <span>
-                    <strong>{item.projectNumber}</strong>
-                    <small>{item.objectLabel}</small>
-                    {item.templateName && <small>{item.templateName}</small>}
-                    <small>{t("Zuletzt geändert", "Última modificación")}: {new Date(item.updatedAt).toLocaleString(locale)}</small>
-                  </span>
-                  <span className={`status ${item.status}`}>{item.status === "draft" ? t("Entwurf", "Borrador") : t("Final", "Final")}</span>
-                </div>
+        {activeMenu === "settings" && (
+          <section className="surface module-panel stack">
+            <ModuleHeader
+              title={t("Einstellungen", "Ajustes")}
+              description={t("Sprache, Oberfläche und Account-Details.", "Idioma, interfaz y detalles de la cuenta.")}
+            />
+            <SettingsPanel language={language} onLanguageChange={onLanguageChange} user={user} userRole={userRole} isOnline={isOnline} />
+          </section>
+        )}
 
-                <div className="row">
-                  <button type="button" className="ghost" onClick={() => onOpenReport(item.id)}>
-                    {t("Bearbeiten", "Editar")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={item.status !== "draft" || !isOnline || deletingReportId === item.id}
-                    onClick={() => void deleteDraftReport(item)}
-                  >
-                    {deletingReportId === item.id ? t("Lösche...", "Eliminando...") : t("Löschen", "Eliminar")}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {activeMenu === "kunden" && <ClientManager uid={uid} isOnline={isOnline} language={language} />}
-      {activeMenu === "settings" && (
-        <SettingsPanel language={language} onLanguageChange={onLanguageChange} user={user} isOnline={isOnline} />
-      )}
-      {activeMenu === "templates" && canManageTemplates && (
-        <TemplateManager uid={uid} isOnline={isOnline} language={language} />
-      )}
-    </main>
+        {activeMenu === "templates" && canManageTemplates && (
+          <section className="surface module-panel stack">
+            <ModuleHeader
+              title={t("PDF Vorlagen", "Plantillas PDF")}
+              description={t("Erstelle und veröffentliche PDF-AcroForm-Vorlagen.", "Crea y publica plantillas PDF AcroForm.")}
+            />
+            <TemplateManager uid={uid} isOnline={isOnline} language={language} />
+          </section>
+        )}
+      </div>
+    </AppShell>
   );
 };

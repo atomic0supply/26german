@@ -8,6 +8,7 @@ export type TemplateImageFieldMap = Record<string, string | string[]>;
 export type TemplateStatus = "draft" | "published";
 export type TemplateFieldType = "text" | "textarea" | "checkbox" | "dropdown" | "image" | "signature";
 export type TemplateFieldSource = "dynamic" | "image" | "signature";
+export type TemplateSchemaSource = "manual" | "ai" | "mixed";
 
 export interface TemplateFieldRect {
   x: number;
@@ -27,6 +28,9 @@ export interface TemplateFieldSchema {
   options: string[];
   defaultValue: string;
   helpText: string;
+  aiConfidence?: number;
+  aiReason?: string;
+  generatedByAi?: boolean;
 }
 
 export interface TemplateSummary {
@@ -52,6 +56,10 @@ export interface TemplateVersion {
   publishedAt?: string;
   publishedBy?: string;
   status: TemplateStatus;
+  schemaSource?: TemplateSchemaSource;
+  schemaGeneratedAt?: string;
+  schemaModel?: string;
+  schemaWarnings?: string[];
 }
 
 export interface ReportData {

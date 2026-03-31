@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
@@ -38,6 +38,31 @@ const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
   return response.blob();
 };
 
+const EditorSection = ({
+  title,
+  description,
+  collapsed,
+  onToggle,
+  children
+}: {
+  title: string;
+  description?: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) => (
+  <section className="editor-section-card">
+    <button type="button" className="editor-section-header" onClick={onToggle}>
+      <span>
+        <strong>{title}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      <span>{collapsed ? "+" : "-"}</span>
+    </button>
+    {!collapsed && <div className="editor-section-body stack">{children}</div>}
+  </section>
+);
+
 export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorProps) => {
   const [report, setReport] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,6 +73,11 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
   const [previewLoading, setPreviewLoading] = useState(false);
   const [clients, setClients] = useState<ClientData[]>([]);
   const [customTemplateVersion, setCustomTemplateVersion] = useState<TemplateVersion | null>(null);
+  const [editorViewMode, setEditorViewMode] = useState<"split" | "form" | "preview">("split");
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    contacts: true,
+    advanced: true
+  });
   const previewBlobUrlRef = useRef("");
   const previewRequestIdRef = useRef(0);
   const templatePreviewInitRef = useRef<string | null>(null);
@@ -137,6 +167,12 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
   }, [report?.templateRef, report?.templateVersionRef]);
 
   const readOnly = saving || !isOnline || report?.status === "finalized";
+  const toggleSection = (key: string) => {
+    setCollapsedSections((previous) => ({
+      ...previous,
+      [key]: !previous[key]
+    }));
+  };
 
   const customDynamicFields = useMemo(
     () =>
@@ -171,6 +207,11 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
 
     return report ? (TEMPLATE_OPTIONS_BY_ID[report.brandTemplateId]?.requiredTemplateFields ?? []) : [];
   }, [customDynamicFields, report]);
+
+  const validationErrors = useMemo(
+    () => (report ? validateReportForFinalize(report, requiredTemplateFields) : []),
+    [report, requiredTemplateFields]
+  );
 
   const updateReport = (updater: (previous: ReportData) => ReportData) => {
     setReport((previous) => {
@@ -572,14 +613,26 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
   }
 
   return (
-    <main className="container stack">
-      {!isOnline && <div className="offline-banner">Offline: Diese v1-App unterstützt nur Online-Bearbeitung.</div>}
-
-      <header className="page-head">
-        <button type="button" className="ghost" onClick={onBack}>
-          Zurück
-        </button>
+    <main className="editor-shell">
+      <section className="editor-toolbar surface">
+        <div>
+          <p className="eyebrow">Report Workspace</p>
+          <h1>{report.templateName ?? "Custom Template"}</h1>
+          <p>Projekt {report.projectInfo.projectNumber || "-"} · {report.status === "finalized" ? "Final" : "Entwurf"}</p>
+        </div>
         <div className="row">
+          <button type="button" className="ghost" onClick={onBack}>
+            Zurück
+          </button>
+          <button type="button" className={editorViewMode === "form" ? "tab active" : "tab"} onClick={() => setEditorViewMode("form")}>
+            Formular
+          </button>
+          <button type="button" className={editorViewMode === "split" ? "tab active" : "tab"} onClick={() => setEditorViewMode("split")}>
+            Split
+          </button>
+          <button type="button" className={editorViewMode === "preview" ? "tab active" : "tab"} onClick={() => setEditorViewMode("preview")}>
+            Preview
+          </button>
           <button type="button" className="ghost" disabled={readOnly} onClick={() => void persistReport()}>
             Speichern
           </button>
@@ -598,731 +651,802 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
             PDF per E-Mail senden
           </button>
         </div>
-      </header>
+      </section>
 
+      {!isOnline && <div className="offline-banner editor-summary-bar">Offline: Diese v1-App unterstützt nur Online-Bearbeitung.</div>}
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
 
-      {previewUrl && (
-        <section className="card stack">
-          <h2>PDF Vorschau</h2>
-          <p>
-            <a href={previewUrl} target="_blank" rel="noreferrer">Im neuen Tab öffnen</a>
-          </p>
-          <object className="pdf-preview-frame" data={previewUrl} type="application/pdf">
-            <p>Der Browser konnte die PDF Vorschau nicht direkt anzeigen.</p>
-          </object>
-        </section>
-      )}
-
-      <section className="card stack">
-        <h2>Projekt & Termin</h2>
-        <div className="grid two">
-          <label>
-            Vorlage
-            <input value={report.templateName ?? "Custom Template"} disabled />
-          </label>
-
-          <label>
-            Projektnummer
-            <input
-              value={report.projectInfo.projectNumber}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  projectInfo: {
-                    ...previous.projectInfo,
-                    projectNumber: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Messtermin
-            <input
-              type="datetime-local"
-              value={report.projectInfo.appointmentDate}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  projectInfo: {
-                    ...previous.projectInfo,
-                    appointmentDate: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Messtechniker
-            <input
-              value={report.projectInfo.technicianName}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  projectInfo: {
-                    ...previous.projectInfo,
-                    technicianName: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Erstmeldung durch
-            <input
-              value={report.projectInfo.firstReportBy}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  projectInfo: {
-                    ...previous.projectInfo,
-                    firstReportBy: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Messort / Objekt
-            <input
-              value={report.projectInfo.locationObject}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  projectInfo: {
-                    ...previous.projectInfo,
-                    locationObject: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Kunde (E-Mail Versand)
-            <select
-              value={report.clientId}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  clientId: event.target.value
-                }))
-              }
-            >
-              <option value="">Bitte auswählen</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.email} · {client.location}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      {customTemplateVersion && (
-        <section className="card stack">
-          <h2>Dynamische PDF-Felder</h2>
-          <p>Diese Eingaben stammen direkt aus der veröffentlichten Template-Version.</p>
-
-          <div className="grid two">
-            {customDynamicFields
-              .filter((field) => field.type === "text" || field.type === "dropdown")
-              .map((field) => (
-                <label key={field.id}>
-                  {field.label}
-                  {field.type === "dropdown" ? (
-                    <select
-                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
-                      disabled={readOnly}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          templateFields: {
-                            ...previous.templateFields,
-                            [field.id]: event.target.value
-                          }
-                        }))
-                      }
-                    >
-                      <option value="">Bitte auswählen</option>
-                      {field.options.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
-                      disabled={readOnly}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          templateFields: {
-                            ...previous.templateFields,
-                            [field.id]: event.target.value
-                          }
-                        }))
-                      }
-                    />
-                  )}
-                  {field.helpText && <small>{field.helpText}</small>}
-                </label>
-              ))}
+      <section className={editorViewMode === "form" ? "editor-layout form-only" : editorViewMode === "preview" ? "editor-layout preview-only" : "editor-layout"}>
+        <div className="editor-form-pane stack">
+          <div className="surface editor-summary-bar">
+            <strong>{validationErrors.length === 0 ? "Bereit zur Finalisierung" : `${validationErrors.length} offene Punkte`}</strong>
+            <span>{customDynamicFields.length} dynamische Felder · {report.photos.length} Fotos · {previewUrl ? "Preview bereit" : "Noch keine Preview"}</span>
           </div>
 
-          {customDynamicFields
-            .filter((field) => field.type === "textarea")
-            .map((field) => (
-              <label key={field.id}>
-                {field.label}
-                <textarea
-                  value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+          <EditorSection
+            title="Projekt"
+            description="Vorlage, Termin und Ansprechpartner"
+            collapsed={Boolean(collapsedSections.project)}
+            onToggle={() => toggleSection("project")}
+          >
+            <div className="grid two">
+              <label>
+                Vorlage
+                <input value={report.templateName ?? "Custom Template"} disabled />
+              </label>
+
+              <label>
+                Projektnummer
+                <input
+                  value={report.projectInfo.projectNumber}
                   disabled={readOnly}
                   onChange={(event) =>
                     updateReport((previous) => ({
                       ...previous,
-                      templateFields: {
-                        ...previous.templateFields,
-                        [field.id]: event.target.value
+                      projectInfo: {
+                        ...previous.projectInfo,
+                        projectNumber: event.target.value
                       }
                     }))
                   }
                 />
-                {field.helpText && <small>{field.helpText}</small>}
               </label>
-            ))}
 
-          {customDynamicFields.some((field) => field.type === "checkbox") && (
-            <div className="checkbox-grid">
+              <label>
+                Messtermin
+                <input
+                  type="datetime-local"
+                  value={report.projectInfo.appointmentDate}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      projectInfo: {
+                        ...previous.projectInfo,
+                        appointmentDate: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Messtechniker
+                <input
+                  value={report.projectInfo.technicianName}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      projectInfo: {
+                        ...previous.projectInfo,
+                        technicianName: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Erstmeldung durch
+                <input
+                  value={report.projectInfo.firstReportBy}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      projectInfo: {
+                        ...previous.projectInfo,
+                        firstReportBy: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Messort / Objekt
+                <input
+                  value={report.projectInfo.locationObject}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      projectInfo: {
+                        ...previous.projectInfo,
+                        locationObject: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Kunde (E-Mail Versand)
+                <select
+                  value={report.clientId}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      clientId: event.target.value
+                    }))
+                  }
+                >
+                  <option value="">Bitte auswählen</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.email} · {client.location}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </EditorSection>
+
+          {customTemplateVersion && (
+            <EditorSection
+              title="Campos PDF"
+              description="Felder aus der veröffentlichten Vorlage"
+              collapsed={Boolean(collapsedSections.pdf)}
+              onToggle={() => toggleSection("pdf")}
+            >
+              <div className="grid two">
+                {customDynamicFields
+                  .filter((field) => field.type === "text" || field.type === "dropdown")
+                  .map((field) => (
+                    <label key={field.id}>
+                      {field.label}
+                      {field.type === "dropdown" ? (
+                        <select
+                          value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+                          disabled={readOnly}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              templateFields: {
+                                ...previous.templateFields,
+                                [field.id]: event.target.value
+                              }
+                            }))
+                          }
+                        >
+                          <option value="">Bitte auswählen</option>
+                          {field.options.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
+                          disabled={readOnly}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              templateFields: {
+                                ...previous.templateFields,
+                                [field.id]: event.target.value
+                              }
+                            }))
+                          }
+                        />
+                      )}
+                      {field.helpText && <small>{field.helpText}</small>}
+                    </label>
+                  ))}
+              </div>
+
               {customDynamicFields
-                .filter((field) => field.type === "checkbox")
+                .filter((field) => field.type === "textarea")
                 .map((field) => (
-                  <label key={field.id} className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(report.templateFields[field.id])}
+                  <label key={field.id}>
+                    {field.label}
+                    <textarea
+                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
                       disabled={readOnly}
                       onChange={(event) =>
                         updateReport((previous) => ({
                           ...previous,
                           templateFields: {
                             ...previous.templateFields,
-                            [field.id]: event.target.checked
+                            [field.id]: event.target.value
                           }
                         }))
                       }
                     />
-                    {field.label}
+                    {field.helpText && <small>{field.helpText}</small>}
                   </label>
                 ))}
-            </div>
+
+              {customDynamicFields.some((field) => field.type === "checkbox") && (
+                <div className="checkbox-grid">
+                  {customDynamicFields
+                    .filter((field) => field.type === "checkbox")
+                    .map((field) => (
+                      <label key={field.id} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(report.templateFields[field.id])}
+                          disabled={readOnly}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              templateFields: {
+                                ...previous.templateFields,
+                                [field.id]: event.target.checked
+                              }
+                            }))
+                          }
+                        />
+                        {field.label}
+                      </label>
+                    ))}
+                </div>
+              )}
+
+              {customAssetFields.length > 0 && (
+                <div className="template-asset-grid">
+                  {customAssetFields.map((field) => (
+                    <div key={field.id} className="photo-slot">
+                      <h3>{field.label}</h3>
+                      {field.helpText && <p>{field.helpText}</p>}
+                      {report.templateAssetUrls?.[field.id] ? (
+                        <a href={report.templateAssetUrls[field.id]} target="_blank" rel="noreferrer">
+                          Asset öffnen
+                        </a>
+                      ) : (
+                        <p>Noch kein Asset hochgeladen.</p>
+                      )}
+                      <label>
+                        Datei hochladen
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={readOnly}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            void uploadTemplateAsset(field, event.target.files?.[0])
+                          }
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {customSignatureFields.length > 0 && (
+                <p>Die Signaturfelder dieser Vorlage werden aus der Techniker-Signatur unten befüllt.</p>
+              )}
+            </EditorSection>
           )}
 
-          {customAssetFields.length > 0 && (
-            <div className="template-asset-grid">
-              {customAssetFields.map((field) => (
-                <div key={field.id} className="photo-slot">
-                  <h3>{field.label}</h3>
-                  {field.helpText && <p>{field.helpText}</p>}
-                  {report.templateAssetUrls?.[field.id] ? (
-                    <a href={report.templateAssetUrls[field.id]} target="_blank" rel="noreferrer">
-                      Asset öffnen
-                    </a>
-                  ) : (
-                    <p>Noch kein Asset hochgeladen.</p>
-                  )}
-                  <label>
-                    Datei hochladen
-                    <input
-                      type="file"
-                      accept="image/*"
-                      disabled={readOnly}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                        void uploadTemplateAsset(field, event.target.files?.[0])
-                      }
-                    />
-                  </label>
-                </div>
+          <EditorSection
+            title="Contactos"
+            description="Direkte Kommunikationsdaten"
+            collapsed={Boolean(collapsedSections.contacts)}
+            onToggle={() => toggleSection("contacts")}
+          >
+            <div className="grid two">
+              {(
+                [
+                  ["name1", "Name 1"],
+                  ["name2", "Name 2"],
+                  ["street1", "Straße 1"],
+                  ["street2", "Straße 2"],
+                  ["city1", "Ort 1"],
+                  ["city2", "Ort 2"],
+                  ["phone1", "Telefon 1"],
+                  ["phone2", "Telefon 2"],
+                  ["mobile1", "Mobil 1"],
+                  ["mobile2", "Mobil 2"],
+                  ["email", "E-Mail"]
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    value={report.contacts[key]}
+                    disabled={readOnly}
+                    onChange={(event) =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        contacts: {
+                          ...previous.contacts,
+                          [key]: event.target.value
+                        }
+                      }))
+                    }
+                  />
+                </label>
               ))}
             </div>
-          )}
+          </EditorSection>
 
-          {customSignatureFields.length > 0 && (
-            <p>Die Signaturfelder dieser Vorlage werden aus der Techniker-Signatur unten befüllt.</p>
-          )}
-        </section>
-      )}
-
-      <section className="card stack">
-        <h2>Kontakte</h2>
-        <div className="grid two">
-          {(
-            [
-              ["name1", "Name 1"],
-              ["name2", "Name 2"],
-              ["street1", "Straße 1"],
-              ["street2", "Straße 2"],
-              ["city1", "Ort 1"],
-              ["city2", "Ort 2"],
-              ["phone1", "Telefon 1"],
-              ["phone2", "Telefon 2"],
-              ["mobile1", "Mobil 1"],
-              ["mobile2", "Mobil 2"],
-              ["email", "E-Mail"]
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key}>
-              {label}
-              <input
-                value={report.contacts[key]}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    contacts: {
-                      ...previous.contacts,
-                      [key]: event.target.value
-                    }
-                  }))
-                }
-              />
-            </label>
-          ))}
-        </div>
-      </section>
-
-      <section className="card stack">
-        <h2>Schadensbild / Anlass</h2>
-        <div className="checkbox-grid">
-          {DAMAGE_OPTIONS.map((option) => (
-            <label key={option.key} className="checkbox">
-              <input
-                type="checkbox"
-                checked={report.damageChecklist.flags[option.key]}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    damageChecklist: {
-                      ...previous.damageChecklist,
-                      flags: {
-                        ...previous.damageChecklist.flags,
-                        [option.key]: event.target.checked
-                      }
-                    }
-                  }))
-                }
-              />
-              {option.label}
-            </label>
-          ))}
-        </div>
-        <label>
-          Notizen
-          <textarea
-            value={report.damageChecklist.notes}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                damageChecklist: {
-                  ...previous.damageChecklist,
-                  notes: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-      </section>
-
-      <section className="card stack">
-        <h2>Anwesende</h2>
-        <div className="checkbox-grid">
-          {ATTENDEE_OPTIONS.map((option) => (
-            <label key={option.key} className="checkbox">
-              <input
-                type="checkbox"
-                checked={report.attendees.flags[option.key]}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    attendees: {
-                      ...previous.attendees,
-                      flags: {
-                        ...previous.attendees.flags,
-                        [option.key]: event.target.checked
-                      }
-                    }
-                  }))
-                }
-              />
-              {option.label}
-            </label>
-          ))}
-        </div>
-        <label>
-          Weitere Anwesende / Notiz
-          <textarea
-            value={report.attendees.notes}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                attendees: {
-                  ...previous.attendees,
-                  notes: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-      </section>
-
-      <section className="card stack">
-        <h2>Ergebnis der Überprüfung</h2>
-        <div className="checkbox-grid">
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={report.findings.causeFound}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  findings: { ...previous.findings, causeFound: event.target.checked }
-                }))
-              }
-            />
-            Ursache gefunden
-          </label>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={report.findings.causeExposed}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  findings: { ...previous.findings, causeExposed: event.target.checked }
-                }))
-              }
-            />
-            Ursache freigelegt
-          </label>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={report.findings.temporarySeal}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  findings: { ...previous.findings, temporarySeal: event.target.checked }
-                }))
-              }
-            />
-            Notabdichtung
-          </label>
-        </div>
-
-        <label>
-          Ergebnistext
-          <textarea
-            value={report.findings.summary}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                findings: {
-                  ...previous.findings,
-                  summary: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-      </section>
-
-      <section className="card stack">
-        <h2>Weiteres Vorgehen</h2>
-        <div className="grid two">
-          <label>
-            Abgesprochen mit
-            <input
-              value={report.actions.agreedWith}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  actions: {
-                    ...previous.actions,
-                    agreedWith: event.target.value
+          <EditorSection
+            title="Resultado"
+            description="Diagnóstico y texto final"
+            collapsed={Boolean(collapsedSections.findings)}
+            onToggle={() => toggleSection("findings")}
+          >
+            <div className="checkbox-grid">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={report.findings.causeFound}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      findings: { ...previous.findings, causeFound: event.target.checked }
+                    }))
                   }
-                }))
-              }
-            />
-          </label>
-
-          <label>
-            Abzustimmen mit
-            <input
-              value={report.actions.coordinateWith}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  actions: {
-                    ...previous.actions,
-                    coordinateWith: event.target.value
+                />
+                Ursache gefunden
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={report.findings.causeExposed}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      findings: { ...previous.findings, causeExposed: event.target.checked }
+                    }))
                   }
-                }))
-              }
-            />
-          </label>
-        </div>
+                />
+                Ursache freigelegt
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={report.findings.temporarySeal}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      findings: { ...previous.findings, temporarySeal: event.target.checked }
+                    }))
+                  }
+                />
+                Notabdichtung
+              </label>
+            </div>
+            <label>
+              Ergebnistext
+              <textarea
+                value={report.findings.summary}
+                disabled={readOnly}
+                onChange={(event) =>
+                  updateReport((previous) => ({
+                    ...previous,
+                    findings: {
+                      ...previous.findings,
+                      summary: event.target.value
+                    }
+                  }))
+                }
+              />
+            </label>
+          </EditorSection>
 
-        <div className="checkbox-grid">
-          {ACTION_OPTIONS.map((option) => (
-            <label key={option.key} className="checkbox">
+          <EditorSection
+            title="Acciones"
+            description="Nächste Schritte und Abstimmungen"
+            collapsed={Boolean(collapsedSections.actions)}
+            onToggle={() => toggleSection("actions")}
+          >
+            <div className="grid two">
+              <label>
+                Abgesprochen mit
+                <input
+                  value={report.actions.agreedWith}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      actions: {
+                        ...previous.actions,
+                        agreedWith: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Abzustimmen mit
+                <input
+                  value={report.actions.coordinateWith}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      actions: {
+                        ...previous.actions,
+                        coordinateWith: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="checkbox-grid">
+              {ACTION_OPTIONS.map((option) => (
+                <label key={option.key} className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={report.actions.flags[option.key]}
+                    disabled={readOnly}
+                    onChange={(event) =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        actions: {
+                          ...previous.actions,
+                          flags: {
+                            ...previous.actions.flags,
+                            [option.key]: event.target.checked
+                          }
+                        }
+                      }))
+                    }
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+
+            <label>
+              Demontage Details
               <input
-                type="checkbox"
-                checked={report.actions.flags[option.key]}
+                value={report.actions.demontageDetails}
                 disabled={readOnly}
                 onChange={(event) =>
                   updateReport((previous) => ({
                     ...previous,
                     actions: {
                       ...previous.actions,
-                      flags: {
-                        ...previous.actions.flags,
-                        [option.key]: event.target.checked
-                      }
+                      demontageDetails: event.target.value
                     }
                   }))
                 }
               />
-              {option.label}
             </label>
-          ))}
-        </div>
 
-        <label>
-          Demontage Details
-          <input
-            value={report.actions.demontageDetails}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                actions: {
-                  ...previous.actions,
-                  demontageDetails: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-
-        <label>
-          Sonstiges
-          <textarea
-            value={report.actions.notes}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                actions: {
-                  ...previous.actions,
-                  notes: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-      </section>
-
-      <section className="card stack">
-        <h2>Eingesetzte Verfahren und Technik</h2>
-        <div className="checkbox-grid">
-          {TECHNIQUE_OPTIONS.map((option) => (
-            <label key={option} className="checkbox">
-              <input
-                type="checkbox"
-                checked={report.techniques.includes(option)}
+            <label>
+              Sonstiges
+              <textarea
+                value={report.actions.notes}
                 disabled={readOnly}
                 onChange={(event) =>
                   updateReport((previous) => ({
                     ...previous,
-                    techniques: event.target.checked
-                      ? [...previous.techniques, option]
-                      : previous.techniques.filter((item) => item !== option)
+                    actions: {
+                      ...previous.actions,
+                      notes: event.target.value
+                    }
                   }))
                 }
               />
-              {option}
             </label>
-          ))}
-        </div>
-      </section>
+          </EditorSection>
 
-      <section className="card stack">
-        <h2>Bilddokumentation</h2>
-        <div className="photo-grid">
-          {PHOTO_SLOTS.map((slot) => {
-            const photo = report.photos.find((entry) => entry.slot === slot);
+          <EditorSection
+            title="Fotos"
+            description="Bilddokumentation und Assets"
+            collapsed={Boolean(collapsedSections.photos)}
+            onToggle={() => toggleSection("photos")}
+          >
+            <div className="photo-grid">
+              {PHOTO_SLOTS.map((slot) => {
+                const photo = report.photos.find((entry) => entry.slot === slot);
 
-            return (
-              <div key={slot} className="photo-slot">
-                <h3>{slot}. Bild</h3>
-                {photo?.downloadUrl ? (
-                  <a href={photo.downloadUrl} target="_blank" rel="noreferrer">
-                    Bild öffnen
-                  </a>
-                ) : (
-                  <p>Noch kein Bild hochgeladen.</p>
-                )}
+                return (
+                  <div key={slot} className="photo-slot">
+                    <h3>{slot}. Bild</h3>
+                    {photo?.downloadUrl ? (
+                      <a href={photo.downloadUrl} target="_blank" rel="noreferrer">
+                        Bild öffnen
+                      </a>
+                    ) : (
+                      <p>Noch kein Bild hochgeladen.</p>
+                    )}
 
+                    <label>
+                      Datei hochladen
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={readOnly}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          void handlePhotoUpload(slot, event.target.files?.[0])
+                        }
+                      />
+                    </label>
+
+                    <label>
+                      Ort der Aufnahme
+                      <input
+                        value={photo?.location ?? ""}
+                        disabled={readOnly}
+                        onChange={(event) => updatePhotoMeta(slot, "location", event.target.value)}
+                      />
+                    </label>
+
+                    <label>
+                      Dokumentation
+                      <textarea
+                        value={photo?.documentation ?? ""}
+                        disabled={readOnly}
+                        onChange={(event) => updatePhotoMeta(slot, "documentation", event.target.value)}
+                      />
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </EditorSection>
+
+          <EditorSection
+            title="Firma"
+            description="Techniker-Signatur für den finalen Bericht"
+            collapsed={Boolean(collapsedSections.signature)}
+            onToggle={() => toggleSection("signature")}
+          >
+            <label>
+              Name
+              <input
+                value={report.signature.technicianName}
+                disabled={readOnly}
+                onChange={(event) =>
+                  updateReport((previous) => ({
+                    ...previous,
+                    signature: {
+                      ...previous.signature,
+                      technicianName: event.target.value
+                    }
+                  }))
+                }
+              />
+            </label>
+
+            <SignaturePad
+              initialValue={report.signature.dataUrl || report.signature.downloadUrl}
+              disabled={readOnly}
+              onChange={(dataUrl) =>
+                updateReport((previous) => ({
+                  ...previous,
+                  signature: {
+                    ...previous.signature,
+                    dataUrl,
+                    signedAt: new Date().toISOString()
+                  }
+                }))
+              }
+            />
+          </EditorSection>
+
+          <EditorSection
+            title="Avanzado"
+            description="Daño, asistentes, técnicas y facturación"
+            collapsed={Boolean(collapsedSections.advanced)}
+            onToggle={() => toggleSection("advanced")}
+          >
+            <div className="stack">
+              <h3>Schadensbild / Anlass</h3>
+              <div className="checkbox-grid">
+                {DAMAGE_OPTIONS.map((option) => (
+                  <label key={option.key} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.damageChecklist.flags[option.key]}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          damageChecklist: {
+                            ...previous.damageChecklist,
+                            flags: {
+                              ...previous.damageChecklist.flags,
+                              [option.key]: event.target.checked
+                            }
+                          }
+                        }))
+                      }
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+              <label>
+                Notizen
+                <textarea
+                  value={report.damageChecklist.notes}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      damageChecklist: {
+                        ...previous.damageChecklist,
+                        notes: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="stack">
+              <h3>Anwesende</h3>
+              <div className="checkbox-grid">
+                {ATTENDEE_OPTIONS.map((option) => (
+                  <label key={option.key} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.attendees.flags[option.key]}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          attendees: {
+                            ...previous.attendees,
+                            flags: {
+                              ...previous.attendees.flags,
+                              [option.key]: event.target.checked
+                            }
+                          }
+                        }))
+                      }
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+              <label>
+                Weitere Anwesende / Notiz
+                <textarea
+                  value={report.attendees.notes}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    updateReport((previous) => ({
+                      ...previous,
+                      attendees: {
+                        ...previous.attendees,
+                        notes: event.target.value
+                      }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="stack">
+              <h3>Eingesetzte Verfahren und Technik</h3>
+              <div className="checkbox-grid">
+                {TECHNIQUE_OPTIONS.map((option) => (
+                  <label key={option} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.techniques.includes(option)}
+                      disabled={readOnly}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          techniques: event.target.checked
+                            ? [...previous.techniques, option]
+                            : previous.techniques.filter((item) => item !== option)
+                        }))
+                      }
+                    />
+                    {option}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="stack">
+              <h3>Abrechnung</h3>
+              <div className="grid three">
                 <label>
-                  Datei hochladen
+                  Von
                   <input
-                    type="file"
-                    accept="image/*"
+                    type="time"
+                    value={report.billing.from}
                     disabled={readOnly}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      void handlePhotoUpload(slot, event.target.files?.[0])
+                    onChange={(event) =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        billing: {
+                          ...previous.billing,
+                          from: event.target.value
+                        }
+                      }))
                     }
                   />
                 </label>
 
                 <label>
-                  Ort der Aufnahme
+                  Bis
                   <input
-                    value={photo?.location ?? ""}
+                    type="time"
+                    value={report.billing.to}
                     disabled={readOnly}
-                    onChange={(event) => updatePhotoMeta(slot, "location", event.target.value)}
+                    onChange={(event) =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        billing: {
+                          ...previous.billing,
+                          to: event.target.value
+                        }
+                      }))
+                    }
                   />
                 </label>
 
                 <label>
-                  Dokumentation
-                  <textarea
-                    value={photo?.documentation ?? ""}
+                  Arbeitszeit (Stunden)
+                  <input
+                    value={report.billing.workingTimeHours}
                     disabled={readOnly}
-                    onChange={(event) => updatePhotoMeta(slot, "documentation", event.target.value)}
+                    onChange={(event) =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        billing: {
+                          ...previous.billing,
+                          workingTimeHours: event.target.value
+                        }
+                      }))
+                    }
                   />
                 </label>
               </div>
-            );
-          })}
+            </div>
+          </EditorSection>
         </div>
-      </section>
 
-      <section className="card stack">
-        <h2>Abrechnung</h2>
-        <div className="grid three">
-          <label>
-            Von
-            <input
-              type="time"
-              value={report.billing.from}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  billing: {
-                    ...previous.billing,
-                    from: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
+        <aside className="editor-preview-pane">
+          <div className="surface stack editor-preview-surface">
+            <div className="module-header">
+              <div>
+                <h2>PDF Vorschau</h2>
+                <p>{previewLoading ? "Preview wird erzeugt..." : previewUrl ? "Aktuelle Arbeitsansicht des PDFs." : "Noch keine Vorschau erzeugt."}</p>
+              </div>
+              <div className="row">
+                <button type="button" className="ghost" disabled={readOnly || previewLoading} onClick={previewPdf}>
+                  Aktualisieren
+                </button>
+                {previewUrl && (
+                  <a className="ghost button-link" href={previewUrl} target="_blank" rel="noreferrer">
+                    Im neuen Tab
+                  </a>
+                )}
+              </div>
+            </div>
 
-          <label>
-            Bis
-            <input
-              type="time"
-              value={report.billing.to}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  billing: {
-                    ...previous.billing,
-                    to: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
+            {previewUrl ? (
+              <object className="pdf-preview-frame editor-pdf-frame" data={previewUrl} type="application/pdf">
+                <p>Der Browser konnte die PDF Vorschau nicht direkt anzeigen.</p>
+              </object>
+            ) : (
+              <div className="empty-state preview-empty-state">
+                <strong>Noch keine PDF Vorschau</strong>
+                <p>Speichere den Bericht und erzeuge eine Vorschau, um das finale Dokument hier zu prüfen.</p>
+              </div>
+            )}
 
-          <label>
-            Arbeitszeit (Stunden)
-            <input
-              value={report.billing.workingTimeHours}
-              disabled={readOnly}
-              onChange={(event) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  billing: {
-                    ...previous.billing,
-                    workingTimeHours: event.target.value
-                  }
-                }))
-              }
-            />
-          </label>
-        </div>
-      </section>
-
-      <section className="card stack">
-        <h2>Techniker-Signatur</h2>
-        <label>
-          Name
-          <input
-            value={report.signature.technicianName}
-            disabled={readOnly}
-            onChange={(event) =>
-              updateReport((previous) => ({
-                ...previous,
-                signature: {
-                  ...previous.signature,
-                  technicianName: event.target.value
-                }
-              }))
-            }
-          />
-        </label>
-
-        <SignaturePad
-          initialValue={report.signature.dataUrl || report.signature.downloadUrl}
-          disabled={readOnly}
-          onChange={(dataUrl) =>
-            updateReport((previous) => ({
-              ...previous,
-              signature: {
-                ...previous.signature,
-                dataUrl,
-                signedAt: new Date().toISOString()
-              }
-            }))
-          }
-        />
+            {validationErrors.length > 0 && (
+              <div className="surface-muted stack">
+                <strong>Validierung</strong>
+                {validationErrors.map((item) => (
+                  <small key={item}>{item}</small>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
       </section>
     </main>
   );

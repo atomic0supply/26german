@@ -17,7 +17,13 @@ import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { db, functions, storage } from "../firebase";
 import { Language, translate } from "../i18n";
-import { TemplateFieldSchema, TemplateSummary, TemplateVersion } from "../types";
+import { SuggestTemplateSchemaResult, TemplateFieldSchema, TemplateSummary, TemplateVersion } from "../types";
+import { TemplateCanvas } from "./templates/TemplateCanvas";
+import { TemplateFieldList } from "./templates/TemplateFieldList";
+import { TemplateInspector } from "./templates/TemplateInspector";
+import { TemplateLibraryPanel } from "./templates/TemplateLibraryPanel";
+import { TemplateToolPanel } from "./templates/TemplateToolPanel";
+import { TemplateWorkspaceHeader } from "./templates/TemplateWorkspaceHeader";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
@@ -36,25 +42,17 @@ interface TemplateManagerProps {
   language: Language;
 }
 
-const TOOLBAR_ITEMS: Array<{ type: TemplateFieldSchema["type"]; label: string }> = [
-  { type: "text", label: "Text" },
-  { type: "textarea", label: "Textarea" },
-  { type: "checkbox", label: "Checkbox" },
-  { type: "dropdown", label: "Dropdown" },
-  { type: "image", label: "Image" },
-  { type: "signature", label: "Signature" }
-];
-
 const DEFAULT_RECT: Record<TemplateFieldSchema["type"], { width: number; height: number }> = {
   text: { width: 0.24, height: 0.035 },
   textarea: { width: 0.3, height: 0.09 },
-  checkbox: { width: 0.03, height: 0.03 },
+  checkbox: { width: 0.015, height: 0.015 },
   dropdown: { width: 0.22, height: 0.04 },
   image: { width: 0.22, height: 0.14 },
   signature: { width: 0.24, height: 0.08 }
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const snap = (value: number) => Math.round(value * 200) / 200;
 
 const createDefaultField = (type: TemplateFieldSchema["type"], page: number, x: number, y: number): TemplateFieldSchema => {
   const rect = DEFAULT_RECT[type];
@@ -81,6 +79,7 @@ const duplicateField = (field: TemplateFieldSchema): TemplateFieldSchema => ({
   ...field,
   id: `${field.id}_copy_${Date.now().toString().slice(-4)}`,
   label: `${field.label} Copy`,
+  generatedByAi: false,
   rect: {
     ...field.rect,
     x: clamp(field.rect.x + 0.02, 0, 1 - field.rect.width),
@@ -116,6 +115,11 @@ const renderPdfPages = async (bytes: ArrayBuffer): Promise<RenderedPage[]> => {
   return pages;
 };
 
+const markVersionAsManual = (version: TemplateVersion): TemplateVersion => ({
+  ...version,
+  schemaSource: version.schemaSource === "ai" ? "mixed" : version.schemaSource ?? "manual"
+});
+
 export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProps) => {
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<TemplateSummary | null>(null);
@@ -126,12 +130,17 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
   const [tool, setTool] = useState<ToolType>(null);
   const [selectedFieldId, setSelectedFieldId] = useState("");
   const [pages, setPages] = useState<RenderedPage[]>([]);
+  const [zoom, setZoom] = useState(1);
+  const [visiblePage, setVisiblePage] = useState<number | "all">("all");
   const [uploading, setUploading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [workingFileName, setWorkingFileName] = useState("");
+  const [draggingFieldId, setDraggingFieldId] = useState("");
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const activeVersionRef = useRef<TemplateVersion | null>(null);
   const dragRef = useRef<{
     fieldId: string;
     mode: "move" | "resize";
@@ -141,6 +150,10 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
     rect: TemplateFieldSchema["rect"];
   } | null>(null);
   const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+
+  useEffect(() => {
+    activeVersionRef.current = activeVersion;
+  }, [activeVersion]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -211,13 +224,10 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
   }, [activeVersion?.basePdfPath]);
 
   useEffect(() => {
-    if (!dragRef.current || !activeVersion) {
-      return undefined;
-    }
-
     const handleMove = (event: MouseEvent) => {
       const drag = dragRef.current;
-      if (!drag) {
+      const currentVersion = activeVersionRef.current;
+      if (!drag || !currentVersion) {
         return;
       }
 
@@ -230,7 +240,7 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       const deltaX = (event.clientX - drag.startX) / bounds.width;
       const deltaY = (event.clientY - drag.startY) / bounds.height;
 
-      const updated = activeVersion.fieldSchema.map((field) => {
+      const updated = currentVersion.fieldSchema.map((field) => {
         if (field.id !== drag.fieldId) {
           return field;
         }
@@ -240,8 +250,8 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
             ...field,
             rect: {
               ...field.rect,
-              x: clamp(drag.rect.x + deltaX, 0, 1 - drag.rect.width),
-              y: clamp(drag.rect.y + deltaY, 0, 1 - drag.rect.height)
+              x: snap(clamp(drag.rect.x + deltaX, 0, 1 - drag.rect.width)),
+              y: snap(clamp(drag.rect.y + deltaY, 0, 1 - drag.rect.height))
             }
           };
         }
@@ -250,20 +260,21 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
           ...field,
           rect: {
             ...field.rect,
-            width: clamp(drag.rect.width + deltaX, 0.02, 1 - drag.rect.x),
-            height: clamp(drag.rect.height + deltaY, 0.02, 1 - drag.rect.y)
+            width: snap(clamp(drag.rect.width + deltaX, field.type === "checkbox" ? 0.015 : 0.02, 1 - drag.rect.x)),
+            height: snap(clamp(drag.rect.height + deltaY, field.type === "checkbox" ? 0.015 : 0.02, 1 - drag.rect.y))
           }
         };
       });
 
-      setActiveVersion({
-        ...activeVersion,
+      setActiveVersion(markVersionAsManual({
+        ...currentVersion,
         fieldSchema: updated
-      });
+      }));
     };
 
     const handleUp = () => {
       dragRef.current = null;
+      setDraggingFieldId("");
     };
 
     window.addEventListener("mousemove", handleMove);
@@ -272,11 +283,21 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
     };
-  }, [activeVersion]);
+  }, []);
 
   const selectedField = useMemo(
     () => activeVersion?.fieldSchema.find((field) => field.id === selectedFieldId) ?? null,
     [activeVersion, selectedFieldId]
+  );
+
+  const visiblePages = useMemo(
+    () => pages.filter((page) => visiblePage === "all" || page.index === visiblePage),
+    [pages, visiblePage]
+  );
+
+  const versionFields = useMemo(
+    () => [...(activeVersion?.fieldSchema ?? [])].sort((left, right) => left.page - right.page || left.label.localeCompare(right.label)),
+    [activeVersion]
   );
 
   const createTemplateDraft = async () => {
@@ -328,7 +349,9 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       versionNumber: 1,
       createdBy: uid,
       createdAt: new Date().toISOString(),
-      status: "draft"
+      status: "draft",
+      schemaSource: "manual",
+      schemaWarnings: []
     });
     setNotice(t("Vorlagenentwurf erstellt.", "Borrador de plantilla creado."));
   };
@@ -359,7 +382,9 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       versionNumber: (latestVersion?.versionNumber ?? 0) + 1,
       createdBy: uid,
       createdAt: new Date().toISOString(),
-      status: "draft"
+      status: "draft",
+      schemaSource: latestVersion?.schemaSource ?? "manual",
+      schemaWarnings: latestVersion?.schemaWarnings ?? []
     });
   };
 
@@ -385,7 +410,7 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       });
 
       setWorkingFileName(file.name);
-      setNotice(t("PDF base cargado.", "PDF base subido."));
+      setNotice(t("Basis-PDF hochgeladen.", "PDF base subido."));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "PDF konnte nicht hochgeladen werden");
     } finally {
@@ -416,6 +441,10 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
     setError("");
     await updateDoc(doc(db, `templates/${activeTemplate.id}/versions/${activeVersion.id}`), {
       fieldSchema: activeVersion.fieldSchema,
+      schemaSource: activeVersion.schemaSource ?? "manual",
+      schemaGeneratedAt: activeVersion.schemaGeneratedAt ?? null,
+      schemaModel: activeVersion.schemaModel ?? null,
+      schemaWarnings: activeVersion.schemaWarnings ?? [],
       updatedAt: serverTimestamp()
     });
     await updateDoc(doc(db, "templates", activeTemplate.id), {
@@ -451,6 +480,63 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
     }
   };
 
+  const analyzeWithAi = async () => {
+    if (!activeTemplate || !activeVersion?.basePdfPath) {
+      return;
+    }
+
+    const hasExistingFields = activeVersion.fieldSchema.length > 0;
+    const overwriteExisting = hasExistingFields
+      ? window.confirm(
+          t(
+            "OK ersetzt die aktuelle Feldliste. Abbrechen mischt den KI-Entwurf mit den vorhandenen Feldern.",
+            "Aceptar reemplaza la lista actual. Cancelar mezcla el borrador IA con los campos existentes."
+          )
+        )
+      : true;
+
+    setAnalyzing(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const callable = httpsCallable<
+        { templateId: string; versionId: string; overwriteExisting: boolean },
+        SuggestTemplateSchemaResult
+      >(functions, "suggestTemplateSchema");
+      const result = await callable({
+        templateId: activeTemplate.id,
+        versionId: activeVersion.id,
+        overwriteExisting
+      });
+
+      setActiveVersion((current) =>
+        current
+          ? {
+              ...current,
+              fieldSchema: result.data.fieldSchema,
+              schemaSource: result.data.schemaSource,
+              schemaGeneratedAt: result.data.generatedAt,
+              schemaModel: result.data.model,
+              schemaWarnings: result.data.warnings
+            }
+          : current
+      );
+      setSelectedFieldId(result.data.fieldSchema[0]?.id ?? "");
+      const warningsText = result.data.warnings.length > 0 ? ` · ${result.data.warnings.join(" · ")}` : "";
+      setNotice(
+        t(
+          `KI-Analyse abgeschlossen: ${result.data.fieldSchema.length} Felder erkannt. ${result.data.summary}${warningsText}`,
+          `Análisis IA completado: ${result.data.fieldSchema.length} campos detectados. ${result.data.summary}${warningsText}`
+        )
+      );
+    } catch (analysisError) {
+      setError(analysisError instanceof Error ? analysisError.message : "KI-Analyse fehlgeschlagen");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   const placeField = (pageIndex: number, event: ReactMouseEvent<HTMLDivElement>) => {
     if (!tool || !activeVersion) {
       return;
@@ -466,10 +552,10 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
     const y = (event.clientY - bounds.top) / bounds.height;
     const nextField = createDefaultField(tool, pageIndex, x, y);
 
-    setActiveVersion({
+    setActiveVersion(markVersionAsManual({
       ...activeVersion,
-      fieldSchema: [...activeVersion.fieldSchema, nextField]
-    });
+      fieldSchema: [...activeVersion.fieldSchema, { ...nextField, generatedByAi: false, aiConfidence: undefined, aiReason: undefined }]
+    }));
     setSelectedFieldId(nextField.id);
     setTool(null);
   };
@@ -488,6 +574,7 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       startY: event.clientY,
       rect: field.rect
     };
+    setDraggingFieldId(field.id);
     setSelectedFieldId(field.id);
   };
 
@@ -496,7 +583,7 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       return;
     }
 
-    setActiveVersion({
+    setActiveVersion(markVersionAsManual({
       ...activeVersion,
       fieldSchema: activeVersion.fieldSchema.map((field) =>
         field.id === selectedField.id
@@ -506,7 +593,33 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
             }
           : field
       )
-    });
+    }));
+  };
+
+  const updateDropdownOption = (index: number, value: string) => {
+    if (!selectedField || selectedField.type !== "dropdown") {
+      return;
+    }
+
+    const nextOptions = [...selectedField.options];
+    nextOptions[index] = value;
+    updateSelectedField({ options: nextOptions });
+  };
+
+  const addDropdownOption = () => {
+    if (!selectedField || selectedField.type !== "dropdown") {
+      return;
+    }
+
+    updateSelectedField({ options: [...selectedField.options, `Option ${selectedField.options.length + 1}`] });
+  };
+
+  const removeDropdownOption = (index: number) => {
+    if (!selectedField || selectedField.type !== "dropdown") {
+      return;
+    }
+
+    updateSelectedField({ options: selectedField.options.filter((_, optionIndex) => optionIndex !== index) });
   };
 
   const removeSelectedField = () => {
@@ -514,10 +627,10 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
       return;
     }
 
-    setActiveVersion({
+    setActiveVersion(markVersionAsManual({
       ...activeVersion,
       fieldSchema: activeVersion.fieldSchema.filter((field) => field.id !== selectedField.id)
-    });
+    }));
     setSelectedFieldId("");
   };
 
@@ -527,225 +640,119 @@ export const TemplateManager = ({ uid, isOnline, language }: TemplateManagerProp
     }
 
     const copy = duplicateField(selectedField);
-    setActiveVersion({
+    setActiveVersion(markVersionAsManual({
       ...activeVersion,
       fieldSchema: [...activeVersion.fieldSchema, copy]
-    });
+    }));
     setSelectedFieldId(copy.id);
   };
 
   return (
-    <section className="card stack">
-      <div className="page-head">
-        <div>
-          <h2>{t("PDF Plantillas", "Plantillas PDF")}</h2>
-          <p>{t("PDF planen, Felder zeichnen und als AcroForm veröffentlichen.", "Sube un PDF, dibuja campos y publícalo como AcroForm.")}</p>
-        </div>
-        {activeTemplate && (
-          <div className="row">
-            <button type="button" className="ghost" onClick={createNewVersion}>
-              {t("Neue Version", "Nueva versión")}
-            </button>
-            <button type="button" className="ghost" onClick={saveSchema}>
-              {t("Entwurf speichern", "Guardar borrador")}
-            </button>
-            <button type="button" disabled={publishing || !activeVersion?.basePdfPath} onClick={publishVersion}>
-              {publishing ? t("Veröffentliche...", "Publicando...") : t("Version veröffentlichen", "Publicar versión")}
-            </button>
-          </div>
-        )}
-      </div>
+    <section className="template-workspace">
+      <TemplateWorkspaceHeader
+        template={activeTemplate}
+        version={activeVersion}
+        workingFileName={workingFileName}
+        isAnalyzing={analyzing}
+        isPublishing={publishing}
+        canSave={Boolean(activeTemplate && activeVersion)}
+        canPublish={Boolean(activeTemplate && activeVersion?.basePdfPath)}
+        canAnalyze={Boolean(activeTemplate && activeVersion?.basePdfPath)}
+        onCreateVersion={createNewVersion}
+        onAnalyze={analyzeWithAi}
+        onSave={saveSchema}
+        onPublish={publishVersion}
+        t={t}
+      />
 
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
 
-      {!activeTemplate && (
-        <div className="grid two">
-          <label>
-            {t("Template-Name", "Nombre de plantilla")}
-            <input value={draftName} onChange={(event) => setDraftName(event.target.value)} />
-          </label>
-          <label>
-            {t("Marke", "Marca")}
-            <input value={draftBrand} onChange={(event) => setDraftBrand(event.target.value)} />
-          </label>
-          <button type="button" disabled={!isOnline} onClick={() => void createTemplateDraft()}>
-            {t("Neue Vorlage anlegen", "Crear nueva plantilla")}
-          </button>
-        </div>
-      )}
+      <div className="template-workspace-grid">
+        <aside className="template-workspace-sidebar">
+          <TemplateLibraryPanel
+            templates={templates}
+            activeTemplateId={activeTemplate?.id ?? null}
+            versions={versions}
+            activeVersionId={activeVersion?.id ?? null}
+            draftName={draftName}
+            draftBrand={draftBrand}
+            isOnline={isOnline}
+            workingFileName={workingFileName}
+            onDraftNameChange={setDraftName}
+            onDraftBrandChange={setDraftBrand}
+            onCreateTemplate={() => void createTemplateDraft()}
+            onSelectTemplate={setActiveTemplate}
+            onSelectVersion={setActiveVersion}
+            onUploadBasePdf={uploadBasePdf}
+            t={t}
+          />
 
-      {templates.length > 0 && (
-        <div className="template-grid">
-          {templates.map((template) => (
-            <button
-              key={template.id}
-              type="button"
-              className={activeTemplate?.id === template.id ? "template-card active" : "template-card"}
-              onClick={() => setActiveTemplate(template)}
-            >
-              <strong>{template.name}</strong>
-              <small>{template.brand}</small>
-              <small>{template.status}</small>
-            </button>
-          ))}
-        </div>
-      )}
+          <TemplateToolPanel
+            tool={tool}
+            zoom={zoom}
+            visiblePage={visiblePage}
+            pagesCount={pages.length}
+            onToolChange={setTool}
+            onZoomIn={() => setZoom((current) => Math.min(2, Number((current + 0.1).toFixed(2))))}
+            onZoomOut={() => setZoom((current) => Math.max(0.6, Number((current - 0.1).toFixed(2))))}
+            onZoomReset={() => setZoom(1)}
+            onVisiblePageChange={setVisiblePage}
+            t={t}
+          />
 
-      {activeTemplate && activeVersion && (
-        <div className="template-editor-layout">
-          <aside className="template-side stack">
-            <div className="card stack">
-              <h3>{activeTemplate.name}</h3>
-              <p>{t("Marke", "Marca")}: {activeTemplate.brand}</p>
-              <p>{t("Version", "Versión")}: {activeVersion.versionNumber}</p>
-              <p>{t("Datei", "Archivo")}: {workingFileName || "-"}</p>
-              <label>
-                {t("Basis-PDF hochladen", "Subir PDF base")}
-                <input type="file" accept="application/pdf" disabled={uploading || !isOnline} onChange={uploadBasePdf} />
-              </label>
-            </div>
+          <TemplateFieldList
+            fields={versionFields}
+            selectedFieldId={selectedFieldId}
+            onSelectField={(field) => {
+              setSelectedFieldId(field.id);
+              setVisiblePage(field.page);
+            }}
+            t={t}
+          />
+        </aside>
 
-            <div className="card stack">
-              <h3>{t("Werkzeuge", "Herramientas")}</h3>
-              <div className="toolbar-grid">
-                {TOOLBAR_ITEMS.map((item) => (
-                  <button
-                    key={item.type}
-                    type="button"
-                    className={tool === item.type ? "tab active" : "tab"}
-                    onClick={() => setTool(item.type)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="card stack">
-              <h3>{t("Versionen", "Versiones")}</h3>
-              <div className="stack">
-                {versions.map((version) => (
-                  <button
-                    key={version.id}
-                    type="button"
-                    className={activeVersion.id === version.id ? "tab active" : "tab"}
-                    onClick={() => setActiveVersion(version)}
-                  >
-                    #{version.versionNumber} · {version.status}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {selectedField && (
-              <div className="card stack">
-                <h3>{t("Feldeigenschaften", "Propiedades del campo")}</h3>
-                <label>
-                  ID
-                  <input value={selectedField.id} onChange={(event) => updateSelectedField({ id: event.target.value })} />
-                </label>
-                <label>
-                  Label
-                  <input value={selectedField.label} onChange={(event) => updateSelectedField({ label: event.target.value })} />
-                </label>
-                <label>
-                  Help Text
-                  <input
-                    value={selectedField.helpText}
-                    onChange={(event) => updateSelectedField({ helpText: event.target.value })}
-                  />
-                </label>
-                {selectedField.type === "dropdown" && (
-                  <label>
-                    Optionen (eine pro Zeile)
-                    <textarea
-                      value={selectedField.options.join("\n")}
-                      onChange={(event) =>
-                        updateSelectedField({
-                          options: event.target.value.split("\n").map((entry) => entry.trim()).filter(Boolean)
-                        })
-                      }
-                    />
-                  </label>
+        <main className="template-workspace-canvas">
+          {activeTemplate && activeVersion ? (
+            <TemplateCanvas
+              pages={pages}
+              visiblePage={visiblePage}
+              zoom={zoom}
+              activeVersion={activeVersion}
+              selectedFieldId={selectedFieldId}
+              draggingFieldId={draggingFieldId}
+              pageRefs={pageRefs}
+              onPlaceField={placeField}
+              onSelectField={(field) => setSelectedFieldId(field.id)}
+              onStartDrag={startDrag}
+              t={t}
+            />
+          ) : (
+            <article className="card stack template-canvas-empty">
+              <h3>{t("Canvas", "Lienzo")}</h3>
+              <p className="empty-state">
+                {t(
+                  "Erstelle oder wähle eine Vorlage aus, um mit dem Zeichnen von Feldern zu beginnen.",
+                  "Crea o selecciona una plantilla para empezar a dibujar campos."
                 )}
-                {(selectedField.type === "image" || selectedField.type === "signature") && (
-                  <label>
-                    Default Value / Slot
-                    <input
-                      value={selectedField.defaultValue}
-                      onChange={(event) => updateSelectedField({ defaultValue: event.target.value })}
-                    />
-                  </label>
-                )}
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={selectedField.required}
-                    onChange={(event) => updateSelectedField({ required: event.target.checked })}
-                  />
-                  Required
-                </label>
-                <div className="row">
-                  <button type="button" className="ghost" onClick={addDuplicateField}>
-                    {t("Duplizieren", "Duplicar")}
-                  </button>
-                  <button type="button" onClick={removeSelectedField}>
-                    {t("Löschen", "Eliminar")}
-                  </button>
-                </div>
-              </div>
-            )}
-          </aside>
+              </p>
+            </article>
+          )}
+        </main>
 
-          <div className="template-canvas-stack">
-            {pages.length === 0 && <p>{t("Bitte zuerst ein PDF hochladen.", "Sube primero un PDF.")}</p>}
-            {pages.map((page) => (
-              <div key={page.index} className="template-page-card">
-                <div className="template-page-title">
-                  {t("Seite", "Página")} {page.index + 1}
-                </div>
-                <div
-                  ref={(node) => {
-                    pageRefs.current[page.index] = node;
-                  }}
-                  className="template-page-surface"
-                  style={{ width: page.width, height: page.height }}
-                  onClick={(event) => placeField(page.index, event)}
-                >
-                  <img src={page.src} alt={`page-${page.index + 1}`} draggable={false} />
-                  {activeVersion.fieldSchema
-                    .filter((field) => field.page === page.index)
-                    .map((field) => (
-                      <div
-                        key={field.id}
-                        className={selectedFieldId === field.id ? "template-field active" : "template-field"}
-                        style={{
-                          left: `${field.rect.x * 100}%`,
-                          top: `${field.rect.y * 100}%`,
-                          width: `${field.rect.width * 100}%`,
-                          height: `${field.rect.height * 100}%`
-                        }}
-                        onMouseDown={(event) => startDrag(event, field, "move")}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setSelectedFieldId(field.id);
-                        }}
-                      >
-                        <span>{field.label}</span>
-                        <button
-                          type="button"
-                          className="resize-handle"
-                          onMouseDown={(event) => startDrag(event, field, "resize")}
-                        />
-                      </div>
-                    ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        <aside className="template-workspace-inspector">
+          <TemplateInspector
+            field={selectedField}
+            onUpdateField={updateSelectedField}
+            onUpdateDropdownOption={updateDropdownOption}
+            onAddDropdownOption={addDropdownOption}
+            onRemoveDropdownOption={removeDropdownOption}
+            onDuplicateField={addDuplicateField}
+            onRemoveField={removeSelectedField}
+            t={t}
+          />
+        </aside>
+      </div>
     </section>
   );
 };

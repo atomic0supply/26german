@@ -58,7 +58,7 @@ export const LoginForm = ({ language }: LoginFormProps) => {
         {error && <p className="error">{error}</p>}
 
         <button type="submit" disabled={loading}>
-          {loading ? t("Anmeldung...", "Iniciando sesión...") : t("Anmelden", "Entrar")}
+          {loading ? t("Anmeldung...", "Iniciando sesión...") : t("Anmelden", "Iniciar sesión")}
         </button>
       </form>
     </div>

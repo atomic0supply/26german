@@ -104,13 +104,13 @@ const App = () => {
         if (!cancelled) {
           setAccessStatus("error");
           setAccessError(
-            error instanceof Error
-              ? error.message
-              : translate(
-                  language,
-                  "Berechtigungen konnten nicht geprueft werden.",
-                  "No se pudieron comprobar los permisos."
-                )
+                error instanceof Error
+                  ? error.message
+                  : translate(
+                      language,
+                      "Berechtigungen konnten nicht geprueft werden.",
+                      "No se pudieron comprobar los permisos."
+                    )
           );
         }
       }
@@ -144,7 +144,7 @@ const App = () => {
       if (accessStatus === "missing_profile") {
         return t(
           "Dein Login ist korrekt, aber dein Techniker-Profil fehlt in Firestore (users/{uid}). Bitte den Account mit dem Provisioning-Skript freischalten.",
-          "Tu inicio de sesion es correcto, pero falta tu perfil tecnico en Firestore (users/{uid}). Activa la cuenta con el script de provision."
+          "Tu inicio de sesión es correcto, pero falta tu perfil técnico en Firestore (users/{uid}). Activa la cuenta con el script de provisión."
         );
       }
 
@@ -158,7 +158,7 @@ const App = () => {
       if (accessStatus === "inactive") {
         return t(
           "Dein Techniker-Profil ist vorhanden, aber nicht aktiv (active != true).",
-          "Tu perfil tecnico existe, pero no esta activo (active != true)."
+          "Tu perfil técnico existe, pero no está activo (active != true)."
         );
       }
 

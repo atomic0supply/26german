@@ -8,7 +8,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { sha256 } from "./hash";
 import { DEFAULT_TEMPLATES } from "./templates";
-import { BuiltinTemplateId, ClientData, ReportData, TemplateConfig, TemplateSummary, TemplateVersion } from "./types";
+import { BuiltinTemplateId, ClientData, ReportData, TemplateConfig, TemplateSchemaSource, TemplateSummary, TemplateVersion } from "./types";
 import { validateReportForFinalize } from "./validation";
 
 initializeApp();
@@ -48,12 +48,43 @@ const requireBucket = () => {
   return storageBucket;
 };
 
+const aiSettingsRef = () => getDb().doc("appSettings/ai");
+
+const maskApiKey = (value: string) => {
+  if (!value) {
+    return "";
+  }
+
+  if (value.length <= 8) {
+    return `${value.slice(0, 2)}••••`;
+  }
+
+  return `${value.slice(0, 4)}••••${value.slice(-4)}`;
+};
+
+const getStoredAiSettings = async () => {
+  const snap = await aiSettingsRef().get();
+  const data = snap.data() as { geminiApiKey?: string; geminiModel?: string } | undefined;
+  return {
+    geminiApiKey: String(data?.geminiApiKey ?? process.env.GEMINI_API_KEY ?? "").trim(),
+    geminiModel: String(data?.geminiModel ?? process.env.GEMINI_MODEL ?? "gemini-2.5-flash").trim()
+  };
+};
+
 let pdfModulePromise: Promise<typeof import("./pdf")> | undefined;
 const getPdfModule = async () => {
   if (!pdfModulePromise) {
     pdfModulePromise = import("./pdf");
   }
   return pdfModulePromise;
+};
+
+let schemaSuggestionPromise: Promise<typeof import("./schemaSuggestion")> | undefined;
+const getSchemaSuggestionModule = async () => {
+  if (!schemaSuggestionPromise) {
+    schemaSuggestionPromise = import("./schemaSuggestion");
+  }
+  return schemaSuggestionPromise;
 };
 
 type Mailer = {
@@ -81,6 +112,39 @@ const getMailer = async (): Promise<Mailer | null> => {
   });
 
   return { transporter, from };
+};
+
+const listGeminiModelsFromApi = async (apiKey: string) => {
+  if (!apiKey) {
+    throw new HttpsError("failed-precondition", "GEMINI_API_KEY_NOT_CONFIGURED");
+  }
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+  if (!response.ok) {
+    throw new HttpsError("failed-precondition", `GEMINI_REQUEST_FAILED:${response.status}`);
+  }
+
+  const payload = await response.json() as {
+    models?: Array<{
+      name?: string;
+      displayName?: string;
+      description?: string;
+      supportedGenerationMethods?: string[];
+    }>;
+  };
+
+  return (payload.models ?? [])
+    .filter((model) =>
+      String(model.name ?? "").includes("gemini")
+      && Array.isArray(model.supportedGenerationMethods)
+      && model.supportedGenerationMethods.includes("generateContent")
+    )
+    .map((model) => ({
+      id: String(model.name ?? "").replace(/^models\//, ""),
+      displayName: String(model.displayName ?? model.name ?? "").trim(),
+      description: String(model.description ?? "").trim()
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
 };
 
 const getTemplate = async (templateId: string): Promise<TemplateConfig> => {
@@ -147,6 +211,14 @@ const toPdfRenderError = (error: unknown): HttpsError => {
   }
 
   if (message.startsWith("IMAGE_FIELD_NOT_SUPPORTED:")) {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message === "PDF_TEXT_EXTRACTION_EMPTY" || message === "SCHEMA_SUGGESTION_EMPTY") {
+    return new HttpsError("failed-precondition", message);
+  }
+
+  if (message.startsWith("GEMINI_REQUEST_FAILED:") || message === "GEMINI_EMPTY_RESPONSE" || message === "GEMINI_API_KEY_NOT_CONFIGURED") {
     return new HttpsError("failed-precondition", message);
   }
 
@@ -418,7 +490,7 @@ export const sendReportEmail = onCall(async (request) => {
   };
 });
 
-export const publishTemplateVersion = onCall(async (request) => {
+export const publishTemplateVersion = onCall({ invoker: "public" }, async (request) => {
   const db = getDb();
   const uid = request.auth?.uid;
   if (!uid) {
@@ -493,4 +565,131 @@ export const publishTemplateVersion = onCall(async (request) => {
   } catch (error) {
     throw toPdfRenderError(error);
   }
+});
+
+export const suggestTemplateSchema = onCall({ invoker: "public" }, async (request) => {
+  const db = getDb();
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  await assertTemplateAdmin(uid);
+
+  const templateId = String(request.data?.templateId ?? "").trim();
+  const versionId = String(request.data?.versionId ?? "").trim();
+  const overwriteExisting = Boolean(request.data?.overwriteExisting);
+  if (!templateId || !versionId) {
+    throw new HttpsError("invalid-argument", "VALIDATION_FAILED: templateId/versionId fehlt");
+  }
+
+  const templateRef = db.doc(`templates/${templateId}`);
+  const versionRef = db.doc(`templates/${templateId}/versions/${versionId}`);
+  const [templateSnap, versionSnap] = await Promise.all([templateRef.get(), versionRef.get()]);
+
+  if (!templateSnap.exists || !versionSnap.exists) {
+    throw new HttpsError("not-found", "TEMPLATE_NOT_FOUND");
+  }
+
+  const template = templateSnap.data() as TemplateSummary;
+  const version = versionSnap.data() as TemplateVersion;
+  if (template.createdBy !== uid || version.createdBy !== uid) {
+    throw new HttpsError("permission-denied", "UNAUTHORIZED");
+  }
+
+  if (!version.basePdfPath) {
+    throw new HttpsError("failed-precondition", "TEMPLATE_PDF_NOT_FOUND");
+  }
+
+  const bucket = requireBucket();
+  const [basePdf] = await bucket.file(version.basePdfPath).download().catch(() => {
+    throw new HttpsError("failed-precondition", "TEMPLATE_PDF_NOT_FOUND");
+  });
+
+  try {
+    const schemaSuggestionModule = await getSchemaSuggestionModule();
+    const aiSettings = await getStoredAiSettings();
+    const result = await schemaSuggestionModule.suggestTemplateSchemaFromPdf(basePdf, version, overwriteExisting, {
+      apiKey: aiSettings.geminiApiKey,
+      model: aiSettings.geminiModel
+    });
+    await versionRef.update({
+      fieldSchema: result.fieldSchema,
+      schemaSource: result.schemaSource as TemplateSchemaSource,
+      schemaGeneratedAt: result.generatedAt,
+      schemaModel: result.model,
+      schemaWarnings: result.warnings
+    });
+    await templateRef.update({
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    return result;
+  } catch (error) {
+    throw toPdfRenderError(error);
+  }
+});
+
+export const getAiSettings = onCall({ invoker: "public" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  await assertTemplateAdmin(uid);
+  const settings = await getStoredAiSettings();
+
+  return {
+    hasApiKey: Boolean(settings.geminiApiKey),
+    apiKeyHint: settings.geminiApiKey ? maskApiKey(settings.geminiApiKey) : "",
+    model: settings.geminiModel
+  };
+});
+
+export const listGeminiModels = onCall({ invoker: "public" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  await assertTemplateAdmin(uid);
+  const providedKey = String(request.data?.apiKey ?? "").trim();
+  const settings = await getStoredAiSettings();
+  const apiKey = providedKey || settings.geminiApiKey;
+  const models = await listGeminiModelsFromApi(apiKey);
+
+  return {
+    models,
+    selectedModel: settings.geminiModel || "gemini-2.5-flash"
+  };
+});
+
+export const saveAiSettings = onCall({ invoker: "public" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  await assertTemplateAdmin(uid);
+
+  const apiKey = String(request.data?.apiKey ?? "").trim();
+  const model = String(request.data?.model ?? "").trim();
+  const clearApiKey = Boolean(request.data?.clearApiKey);
+
+  const current = await getStoredAiSettings();
+  const nextApiKey = clearApiKey ? "" : apiKey || current.geminiApiKey;
+  const nextModel = model || current.geminiModel || "gemini-2.5-flash";
+
+  await aiSettingsRef().set({
+    geminiApiKey: nextApiKey,
+    geminiModel: nextModel,
+    updatedBy: uid,
+    updatedAt: FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  return {
+    hasApiKey: Boolean(nextApiKey),
+    apiKeyHint: nextApiKey ? maskApiKey(nextApiKey) : "",
+    model: nextModel
+  };
 });

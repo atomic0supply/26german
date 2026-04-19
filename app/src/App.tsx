@@ -6,6 +6,7 @@ import { LoginForm } from "./components/LoginForm";
 import { ReportList } from "./components/ReportList";
 import { ReportEditor } from "./components/ReportEditor";
 import { detectInitialLanguage, LANGUAGE_STORAGE_KEY, Language, translate } from "./i18n";
+import { requestPushPermissionAndSaveToken, onForegroundMessage } from "./lib/fcm";
 import { UserRole } from "./types";
 
 type AccessStatus = "checking" | "allowed" | "missing_profile" | "wrong_role" | "inactive" | "error";
@@ -58,6 +59,19 @@ const App = () => {
   }, [language]);
 
   useEffect(() => {
+    const unsubscribe = onForegroundMessage((title, body) => {
+      // Show a simple in-app notification banner for foreground push messages
+      const banner = document.createElement("div");
+      banner.style.cssText =
+        "position:fixed;top:16px;right:16px;background:#0c2a4d;color:#fff;padding:12px 16px;border-radius:8px;z-index:9999;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,.3);font-size:14px;";
+      banner.innerHTML = `<strong>${title}</strong><br/>${body}`;
+      document.body.appendChild(banner);
+      setTimeout(() => banner.remove(), 5000);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (!user) {
       setAccessStatus("checking");
       setAccessError("");
@@ -99,6 +113,8 @@ const App = () => {
         if (!cancelled) {
           setUserRole(profile.role as UserRole);
           setAccessStatus("allowed");
+          // Request push notification permission after successful login
+          void requestPushPermissionAndSaveToken(user.uid);
         }
       } catch (error) {
         if (!cancelled) {

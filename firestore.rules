@@ -52,8 +52,38 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn() && userId == request.auth.uid;
+      allow read: if isSignedIn() && (userId == request.auth.uid || isTemplateAdmin());
+      allow list: if isTemplateAdmin();
       allow create, update, delete: if false;
+    }
+
+    match /insurers/{insurerId} {
+      allow read: if isAppUser();
+      allow write: if isTemplateAdmin();
+    }
+
+    match /company/{docId} {
+      allow read: if isAppUser();
+      allow write: if isTemplateAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isAppUser() && (
+        resource.data.assignedTo == request.auth.uid || isTemplateAdmin()
+      );
+      allow create: if isTemplateAdmin()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isTemplateAdmin()
+        || (isTechnician()
+            && resource.data.assignedTo == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "updatedAt"]));
+      allow delete: if isTemplateAdmin();
+    }
+
+    match /fcmTokens/{tokenId} {
+      allow create, update: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow read, delete: if false;
     }
 
     match /templates/{templateId} {
@@ -71,7 +101,8 @@ service cloud.firestore {
     }
 
     match /clients/{clientId} {
-      allow read: if isAppUser() && resource.data.createdBy == request.auth.uid;
+      allow read: if isAppUser() && (resource.data.createdBy == request.auth.uid || isTemplateAdmin());
+      allow list: if isTemplateAdmin();
       allow create: if isAppUser() && request.resource.data.createdBy == request.auth.uid;
       allow update: if isAppUser()
         && ownsClient(clientId)

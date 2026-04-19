@@ -1,14 +1,16 @@
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
+import { getMessaging } from "firebase-admin/messaging";
 import type { Bucket } from "@google-cloud/storage";
 import type { Firestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { sha256 } from "./hash";
 import { DEFAULT_TEMPLATES } from "./templates";
-import { BuiltinTemplateId, ClientData, ReportData, TemplateConfig, TemplateSummary, TemplateVersion } from "./types";
+import { AppointmentData, BuiltinTemplateId, ClientData, CompanySettings, InsurerData, ReportData, TemplateConfig, TemplateSummary, TemplateVersion } from "./types";
 import { validateReportForFinalize } from "./validation";
 
 initializeApp();
@@ -180,6 +182,43 @@ const getReportRenderSource = async (report: ReportData) => {
   };
 };
 
+const getInsurerLogoPath = async (insurerId: string | undefined): Promise<string> => {
+  if (!insurerId) {
+    return "";
+  }
+  const snap = await getDb().doc(`insurers/${insurerId}`).get();
+  if (!snap.exists) {
+    return "";
+  }
+  return String((snap.data() as InsurerData).logoPath ?? "");
+};
+
+const getCompanyFooter = async (): Promise<string> => {
+  const snap = await getDb().doc("company/settings").get();
+  if (!snap.exists) {
+    return "INH. K. Drozyn, Adlerstrasse 61, 66955 Pirmasens";
+  }
+  const s = snap.data() as CompanySettings;
+  return s.footerText || `${s.name}, ${s.address}`;
+};
+
+const sendFcmToUser = async (uid: string, title: string, body: string): Promise<void> => {
+  try {
+    const tokensSnap = await getDb().collection("fcmTokens").where("uid", "==", uid).get();
+    const tokens = tokensSnap.docs.map((d) => String(d.data().token ?? "")).filter(Boolean);
+    if (tokens.length === 0) {
+      return;
+    }
+    await getMessaging().sendEachForMulticast({
+      tokens,
+      notification: { title, body },
+      webpush: { notification: { icon: "/icon-192.svg" }, fcmOptions: { link: "/" } }
+    });
+  } catch (error) {
+    logger.warn("FCM send failed", { uid, error: error instanceof Error ? error.message : String(error) });
+  }
+};
+
 export const finalizeReport = onCall(async (request) => {
   const db = getDb();
   const uid = request.auth?.uid;
@@ -225,9 +264,17 @@ export const finalizeReport = onCall(async (request) => {
   const bucket = requireBucket();
   let pdfBytes: Uint8Array;
   try {
-    pdfBytes = renderSource.kind === "fixed"
-      ? await pdfModule.renderReportPdf(report, renderSource.template, bucket, { flatten: true })
-      : await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: true });
+    const [insurerLogoPath, footerText] = await Promise.all([
+      getInsurerLogoPath(report.insurerId),
+      getCompanyFooter()
+    ]);
+    const assetOverrides = insurerLogoPath ? { insurer_logo: insurerLogoPath } : undefined;
+    if (renderSource.kind === "fixed") {
+      const templateWithFooter = { ...renderSource.template, footerText };
+      pdfBytes = await pdfModule.renderReportPdf(report, templateWithFooter, bucket, { flatten: true });
+    } else {
+      pdfBytes = await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: true }, assetOverrides);
+    }
   } catch (error) {
     throw toPdfRenderError(error);
   }
@@ -300,9 +347,17 @@ export const previewPdf = onCall(async (request) => {
   const bucket = requireBucket();
   let pdfBytes: Uint8Array;
   try {
-    pdfBytes = renderSource.kind === "fixed"
-      ? await pdfModule.renderReportPdf(report, renderSource.template, bucket, { flatten: false })
-      : await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: false });
+    const [insurerLogoPath, footerText] = await Promise.all([
+      getInsurerLogoPath(report.insurerId),
+      getCompanyFooter()
+    ]);
+    const assetOverrides = insurerLogoPath ? { insurer_logo: insurerLogoPath } : undefined;
+    if (renderSource.kind === "fixed") {
+      const templateWithFooter = { ...renderSource.template, footerText };
+      pdfBytes = await pdfModule.renderReportPdf(report, templateWithFooter, bucket, { flatten: false });
+    } else {
+      pdfBytes = await pdfModule.renderSchemaBasedPdf(report, renderSource.version, bucket, { flatten: false }, assetOverrides);
+    }
   } catch (error) {
     throw toPdfRenderError(error);
   }
@@ -494,3 +549,239 @@ export const publishTemplateVersion = onCall(async (request) => {
     throw toPdfRenderError(error);
   }
 });
+
+// ── Insurer Management ─────────────────────────────────────────────────────
+
+export const saveInsurer = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+  await assertTemplateAdmin(uid);
+
+  const { id, name, logoPath, primaryColor, titleColor, active } = request.data as Partial<InsurerData> & { id?: string };
+  if (!name) {
+    throw new HttpsError("invalid-argument", "name is required");
+  }
+
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  if (id) {
+    await db.doc(`insurers/${id}`).update({ name, logoPath: logoPath ?? "", primaryColor: primaryColor ?? "#0c2a4d", titleColor: titleColor ?? "#12395f", active: active ?? true, updatedAt: now });
+    return { id };
+  }
+
+  const ref = await db.collection("insurers").add({ name, logoPath: logoPath ?? "", primaryColor: primaryColor ?? "#0c2a4d", titleColor: titleColor ?? "#12395f", active: true, createdAt: now, updatedAt: now });
+  return { id: ref.id };
+});
+
+// ── Calendar / Appointments ────────────────────────────────────────────────
+
+export const createAppointment = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+  await assertTemplateAdmin(uid);
+
+  const data = request.data as Partial<AppointmentData>;
+  if (!data.title || !data.date || !data.startTime || !data.endTime || !data.assignedTo) {
+    throw new HttpsError("invalid-argument", "title, date, startTime, endTime, assignedTo are required");
+  }
+
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  const userSnap = await db.doc(`users/${data.assignedTo}`).get();
+  const assignedToName = String(userSnap.data()?.displayName ?? data.assignedToName ?? "");
+
+  const appointmentData: Omit<AppointmentData, "id"> = {
+    title: data.title,
+    description: data.description ?? "",
+    date: data.date,
+    startTime: data.startTime,
+    endTime: data.endTime,
+    assignedTo: data.assignedTo,
+    assignedToName,
+    clientId: data.clientId ?? "",
+    clientName: data.clientName ?? "",
+    location: data.location ?? "",
+    status: "scheduled",
+    createdBy: uid,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const ref = await db.collection("appointments").add(appointmentData);
+
+  // Send FCM notification to assigned technician
+  await sendFcmToUser(
+    data.assignedTo,
+    "Neuer Termin",
+    `${data.date} ${data.startTime} – ${data.title}`
+  );
+
+  // Send email confirmation if SMTP is configured
+  const mailer = await getMailer();
+  if (mailer && data.clientId) {
+    try {
+      const clientSnap = await db.doc(`clients/${data.clientId}`).get();
+      const client = clientSnap.data() as ClientData | undefined;
+      if (client?.email) {
+        const icsContent = buildIcsContent(ref.id, appointmentData);
+        await mailer.transporter.sendMail({
+          from: mailer.from,
+          to: client.email,
+          subject: `Terminbestätigung: ${data.title}`,
+          text: [
+            "Guten Tag,",
+            "",
+            `Ihr Termin wurde bestätigt:`,
+            `Titel: ${data.title}`,
+            `Datum: ${data.date}`,
+            `Uhrzeit: ${data.startTime} – ${data.endTime}`,
+            data.location ? `Ort: ${data.location}` : "",
+            data.description ? `Beschreibung: ${data.description}` : "",
+            "",
+            "Viele Grüße"
+          ].filter((line) => line !== null).join("\n"),
+          attachments: [{ filename: "termin.ics", content: icsContent, contentType: "text/calendar" }]
+        });
+        await db.doc(`appointments/${ref.id}`).update({ confirmationEmailSentAt: now });
+      }
+    } catch (emailError) {
+      logger.warn("Appointment confirmation email failed", { error: emailError instanceof Error ? emailError.message : String(emailError) });
+    }
+  }
+
+  logger.info("Appointment created", { appointmentId: ref.id, uid });
+  return { id: ref.id };
+});
+
+export const updateAppointment = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+  await assertActiveUser(uid);
+
+  const { id, ...updates } = request.data as Partial<AppointmentData> & { id: string };
+  if (!id) {
+    throw new HttpsError("invalid-argument", "id is required");
+  }
+
+  const db = getDb();
+  const snap = await db.doc(`appointments/${id}`).get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "Termin nicht gefunden");
+  }
+
+  const existing = snap.data() as AppointmentData;
+  const userSnap = await db.doc(`users/${uid}`).get();
+  const userRole = String(userSnap.data()?.role ?? "");
+  const isAdmin = userRole === "admin" || userRole === "office";
+
+  if (!isAdmin && existing.assignedTo !== uid) {
+    throw new HttpsError("permission-denied", "UNAUTHORIZED");
+  }
+
+  // Technicians can only update status
+  const allowedUpdates = isAdmin ? updates : { status: updates.status, updatedAt: new Date().toISOString() };
+  await db.doc(`appointments/${id}`).update({ ...allowedUpdates, updatedAt: FieldValue.serverTimestamp() });
+
+  // Notify if technician changed
+  if (isAdmin && updates.assignedTo && updates.assignedTo !== existing.assignedTo) {
+    await sendFcmToUser(updates.assignedTo, "Termin zugewiesen", `${updates.date ?? existing.date} ${updates.startTime ?? existing.startTime} – ${updates.title ?? existing.title}`);
+  }
+
+  return { id };
+});
+
+export const deleteAppointment = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+  await assertTemplateAdmin(uid);
+
+  const id = String(request.data?.id ?? "").trim();
+  if (!id) {
+    throw new HttpsError("invalid-argument", "id is required");
+  }
+
+  await getDb().doc(`appointments/${id}`).delete();
+  logger.info("Appointment deleted", { appointmentId: id, uid });
+  return { id };
+});
+
+export const saveFcmToken = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "UNAUTHORIZED");
+  }
+
+  const token = String(request.data?.token ?? "").trim();
+  if (!token) {
+    throw new HttpsError("invalid-argument", "token is required");
+  }
+
+  const db = getDb();
+  const existing = await db.collection("fcmTokens").where("uid", "==", uid).where("token", "==", token).get();
+  if (existing.empty) {
+    await db.collection("fcmTokens").add({ uid, token, platform: "web", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  } else {
+    await existing.docs[0].ref.update({ updatedAt: new Date().toISOString() });
+  }
+
+  return { ok: true };
+});
+
+export const sendAppointmentReminders = onSchedule(
+  { schedule: "every day 07:00", timeZone: "Europe/Berlin", region: "europe-west3" },
+  async () => {
+    const db = getDb();
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+
+    const snap = await db.collection("appointments")
+      .where("date", "==", tomorrowStr)
+      .where("status", "==", "scheduled")
+      .get();
+
+    for (const docSnap of snap.docs) {
+      const appt = docSnap.data() as AppointmentData;
+      if (appt.confirmationEmailSentAt) {
+        continue;
+      }
+      await sendFcmToUser(
+        appt.assignedTo,
+        "Terminerinnerung morgen",
+        `${appt.startTime} – ${appt.title}${appt.location ? ` @ ${appt.location}` : ""}`
+      );
+      await docSnap.ref.update({ notificationSentAt: new Date().toISOString() });
+    }
+
+    logger.info("Appointment reminders sent", { date: tomorrowStr, count: snap.size });
+  }
+);
+
+function buildIcsContent(id: string, appt: Omit<AppointmentData, "id">): string {
+  const dtstart = `${appt.date.replace(/-/g, "")}T${appt.startTime.replace(":", "")}00`;
+  const dtend = `${appt.date.replace(/-/g, "")}T${appt.endTime.replace(":", "")}00`;
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//26german//Einsatzbericht//DE",
+    "BEGIN:VEVENT",
+    `DTSTART:${dtstart}`,
+    `DTEND:${dtend}`,
+    `SUMMARY:${appt.title}`,
+    `DESCRIPTION:${appt.description}`,
+    appt.location ? `LOCATION:${appt.location}` : "",
+    `UID:${id}@26german`,
+    "END:VEVENT",
+    "END:VCALENDAR"
+  ].filter(Boolean).join("\r\n");
+}

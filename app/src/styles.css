@@ -462,3 +462,36 @@ button:disabled {
     position: static;
   }
 }
+
+/* ── Modal overlay ───────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+/* ── Calendar overrides ──────────────────────────────────────────────────── */
+.rbc-calendar {
+  font-family: inherit;
+}
+
+.rbc-toolbar button {
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.rbc-event {
+  border-radius: 4px !important;
+}

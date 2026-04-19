@@ -19,6 +19,7 @@ type RenderOptions = {
 };
 
 type SchemaTemplateInput = Pick<TemplateVersion, "editablePdfPath" | "fieldSchema">;
+type AssetOverrides = Record<string, string>;
 
 const normalizeTargets = (target: string | string[]): string[] => (Array.isArray(target) ? target : [target]);
 
@@ -228,12 +229,23 @@ const applyFixedImageMappings = async (
   }
 };
 
-const getSchemaFieldValue = (report: ReportData, field: TemplateFieldSchema): unknown => {
+const getSchemaFieldValue = (
+  report: ReportData,
+  field: TemplateFieldSchema,
+  assetOverrides?: AssetOverrides
+): unknown => {
   if (field.source === "signature") {
     return report.signature.storagePath ?? "";
   }
 
+  if (field.source === "insurer_logo") {
+    return assetOverrides?.[field.id] ?? "";
+  }
+
   if (field.source === "image") {
+    if (assetOverrides?.[field.id]) {
+      return assetOverrides[field.id];
+    }
     const explicit = report.templateAssetPaths?.[field.id] ?? "";
     if (explicit) {
       return explicit;
@@ -255,16 +267,17 @@ const applySchemaFieldMappings = async (
   pdf: PDFDocument,
   report: ReportData,
   schema: TemplateFieldSchema[],
-  bucket?: Bucket
+  bucket?: Bucket,
+  assetOverrides?: AssetOverrides
 ) => {
   for (const fieldSchema of schema) {
-    if (fieldSchema.type === "image" || fieldSchema.type === "signature") {
-      await assignMappedImage(form, pdf, fieldSchema.id, toText(getSchemaFieldValue(report, fieldSchema)), bucket);
+    if (fieldSchema.type === "image" || fieldSchema.type === "signature" || fieldSchema.source === "insurer_logo") {
+      await assignMappedImage(form, pdf, fieldSchema.id, toText(getSchemaFieldValue(report, fieldSchema, assetOverrides)), bucket);
       continue;
     }
 
     const field = getFieldOrThrow(form, fieldSchema.id);
-    assignMappedValue(field, getSchemaFieldValue(report, fieldSchema));
+    assignMappedValue(field, getSchemaFieldValue(report, fieldSchema, assetOverrides));
   }
 };
 
@@ -383,12 +396,13 @@ export const fillReportPdfFromSchema = async (
   report: ReportData,
   schema: TemplateFieldSchema[],
   bucket?: Bucket,
-  options: RenderOptions = {}
+  options: RenderOptions = {},
+  assetOverrides?: AssetOverrides
 ): Promise<Uint8Array> => {
   const pdf = await PDFDocument.load(editablePdf, { ignoreEncryption: true });
   const form = pdf.getForm();
 
-  await applySchemaFieldMappings(form, pdf, report, schema, bucket);
+  await applySchemaFieldMappings(form, pdf, report, schema, bucket, assetOverrides);
 
   if (options.flatten) {
     form.flatten();
@@ -419,7 +433,8 @@ export const renderSchemaBasedPdf = async (
   report: ReportData,
   templateVersion: SchemaTemplateInput,
   bucket?: Bucket,
-  options: RenderOptions = {}
+  options: RenderOptions = {},
+  assetOverrides?: AssetOverrides
 ): Promise<Uint8Array> => {
   if (!bucket) {
     throw new Error("STORAGE_BUCKET_NOT_CONFIGURED");
@@ -430,5 +445,5 @@ export const renderSchemaBasedPdf = async (
     throw new Error(`TEMPLATE_PDF_NOT_FOUND:${templateVersion.editablePdfPath}`);
   }
 
-  return fillReportPdfFromSchema(templateBytes, report, templateVersion.fieldSchema, bucket, options);
+  return fillReportPdfFromSchema(templateBytes, report, templateVersion.fieldSchema, bucket, options, assetOverrides);
 };

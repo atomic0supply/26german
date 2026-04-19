@@ -9,6 +9,7 @@ import {
 import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 import { connectStorageEmulator, getStorage } from "firebase/storage";
+import { getMessaging, isSupported as isMessagingSupported } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -28,6 +29,19 @@ setPersistence(auth, browserLocalPersistence).catch(() => undefined);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app, "europe-west3");
+
+export let messaging: ReturnType<typeof getMessaging> | null = null;
+if (typeof window !== "undefined") {
+  void isMessagingSupported().then((supported) => {
+    if (supported) {
+      messaging = getMessaging(app);
+      // Forward Firebase config to the service worker for background messages
+      navigator.serviceWorker?.ready.then((registration) => {
+        registration.active?.postMessage({ type: "FIREBASE_CONFIG", config: firebaseConfig });
+      }).catch(() => undefined);
+    }
+  }).catch(() => undefined);
+}
 
 if (typeof window !== "undefined") {
   void isSupported()

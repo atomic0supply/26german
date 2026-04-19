@@ -1,12 +1,16 @@
 import { User } from "firebase/auth";
 import { firebaseConnectionInfo } from "../firebase";
 import { Language, localeForLanguage, translate } from "../i18n";
+import { UserRole } from "../types";
+import { CompanySettingsPanel } from "./CompanySettingsPanel";
 
 interface SettingsPanelProps {
   language: Language;
   onLanguageChange: (language: Language) => void;
   user: User;
   isOnline: boolean;
+  uid: string;
+  userRole: UserRole;
 }
 
 const yesNo = (value: boolean, language: Language): string =>
@@ -14,7 +18,7 @@ const yesNo = (value: boolean, language: Language): string =>
 
 const notAvailable = (language: Language): string => translate(language, "Nicht verfügbar", "No disponible");
 
-export const SettingsPanel = ({ language, onLanguageChange, user, isOnline }: SettingsPanelProps) => {
+export const SettingsPanel = ({ language, onLanguageChange, user, isOnline, uid, userRole }: SettingsPanelProps) => {
   const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
   const locale = localeForLanguage(language);
 
@@ -81,6 +85,8 @@ export const SettingsPanel = ({ language, onLanguageChange, user, isOnline }: Se
           </p>
         </div>
       </article>
+
+      <CompanySettingsPanel uid={uid} userRole={userRole} isOnline={isOnline} language={language} />
 
       <article className="card stack">
         <h3>Firebase</h3>

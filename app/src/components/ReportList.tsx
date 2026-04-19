@@ -19,8 +19,10 @@ import { auth, db } from "../firebase";
 import { Language, localeForLanguage, translate } from "../i18n";
 import { createDefaultReport } from "../lib/defaultReport";
 import { toIsoString } from "../lib/firestore";
-import { ReportListItem, ReportTemplateOption, TemplateSummary, TemplateVersion, UserRole } from "../types";
+import { InsurerData, ReportListItem, ReportTemplateOption, TemplateSummary, TemplateVersion, UserRole } from "../types";
+import { CalendarView } from "./CalendarView";
 import { ClientManager } from "./ClientManager";
+import { InsurerManager } from "./InsurerManager";
 import { SettingsPanel } from "./SettingsPanel";
 import { TemplateManager } from "./TemplateManager";
 
@@ -35,8 +37,10 @@ interface ReportListProps {
 }
 
 export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, language, onLanguageChange }: ReportListProps) => {
-  const [activeMenu, setActiveMenu] = useState<"neu" | "berichte" | "kunden" | "settings" | "templates">("neu");
+  const [activeMenu, setActiveMenu] = useState<"neu" | "berichte" | "kalender" | "kunden" | "settings" | "templates">("neu");
   const [templateSelection, setTemplateSelection] = useState<string>("");
+  const [insurerSelection, setInsurerSelection] = useState<string>("");
+  const [insurers, setInsurers] = useState<InsurerData[]>([]);
   const [items, setItems] = useState<ReportListItem[]>([]);
   const [customTemplates, setCustomTemplates] = useState<TemplateSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,6 +67,23 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
     );
 
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      query(collection(db, "insurers"), where("active", "==", true)),
+      (snapshot) => {
+        const next = snapshot.docs
+          .map((item) => ({ id: item.id, ...(item.data() as Omit<InsurerData, "id">) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setInsurers(next);
+        if (next.length > 0 && !insurerSelection) {
+          setInsurerSelection(next[0].id);
+        }
+      }
+    );
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -185,12 +206,15 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         return acc;
       }, {});
 
+      const selectedInsurer = insurers.find((ins) => ins.id === insurerSelection);
       const payload = {
         ...initial,
         brandTemplateId: "custom" as const,
         templateRef: templateId,
         templateVersionRef: versionId,
         templateName: templateOptions.find((entry) => entry.value === templateSelection)?.name ?? "Custom Template",
+        insurerId: insurerSelection || undefined,
+        insurerName: selectedInsurer?.name ?? "",
         templateFields: {
           ...initial.templateFields,
           ...dynamicDefaults
@@ -276,17 +300,24 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         </button>
         <button
           type="button"
+          className={activeMenu === "kalender" ? "tab active" : "tab"}
+          onClick={() => setActiveMenu("kalender")}
+        >
+          {t("3. Kalender", "3. Calendario")}
+        </button>
+        <button
+          type="button"
           className={activeMenu === "kunden" ? "tab active" : "tab"}
           onClick={() => setActiveMenu("kunden")}
         >
-          {t("3. Kunden", "3. Clientes")}
+          {t("4. Kunden", "4. Clientes")}
         </button>
         <button
           type="button"
           className={activeMenu === "settings" ? "tab active" : "tab"}
           onClick={() => setActiveMenu("settings")}
         >
-          {t("4. Einstellungen", "4. Ajustes")}
+          {t("5. Einstellungen", "5. Ajustes")}
         </button>
         {canManageTemplates && (
           <button
@@ -294,7 +325,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
             className={activeMenu === "templates" ? "tab active" : "tab"}
             onClick={() => setActiveMenu("templates")}
           >
-            {t("5. PDF Vorlagen", "5. Plantillas PDF")}
+            {t("6. PDF Vorlagen", "6. Plantillas PDF")}
           </button>
         )}
       </nav>
@@ -304,7 +335,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
       {activeMenu === "neu" && (
         <section className="card stack">
-          <h2>{t("Neuer Bericht aus PDF-Vorlage", "Nuevo informe desde plantilla PDF")}</h2>
+          <h2>{t("Neuer Bericht", "Nuevo informe")}</h2>
           {templateOptions.length === 0 ? (
             <p>
               {t(
@@ -314,18 +345,29 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
             </p>
           ) : (
             <>
-              <label>
-                {t("PDF-Vorlage", "Plantilla PDF")}
-                <select value={templateSelection} onChange={(event) => setTemplateSelection(event.target.value)}>
-                  {templateOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {insurers.length > 0 && (
+                <label>
+                  {t("Versicherungsgesellschaft", "Compañía aseguradora")}
+                  <select value={insurerSelection} onChange={(e) => setInsurerSelection(e.target.value)}>
+                    <option value="">{t("-- Keine Versicherung --", "-- Sin aseguradora --")}</option>
+                    {insurers.map((ins) => (
+                      <option key={ins.id} value={ins.id}>{ins.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {templateOptions.length > 1 && (
+                <label>
+                  {t("PDF-Vorlage", "Plantilla PDF")}
+                  <select value={templateSelection} onChange={(event) => setTemplateSelection(event.target.value)}>
+                    {templateOptions.map((entry) => (
+                      <option key={entry.value} value={entry.value}>{entry.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button type="button" onClick={createReport} disabled={creating || !isOnline || !templateSelection}>
-                {creating ? t("Erstelle Bericht...", "Creando informe...") : t(`Neuer Bericht (${templateName})`, `Nuevo informe (${templateName})`)}
+                {creating ? t("Erstelle Bericht...", "Creando informe...") : t(`Neuer Bericht erstellen`, `Crear nuevo informe`)}
               </button>
             </>
           )}
@@ -369,12 +411,18 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         </section>
       )}
 
+      {activeMenu === "kalender" && (
+        <CalendarView uid={uid} userRole={userRole} isOnline={isOnline} language={language} />
+      )}
       {activeMenu === "kunden" && <ClientManager uid={uid} isOnline={isOnline} language={language} />}
       {activeMenu === "settings" && (
-        <SettingsPanel language={language} onLanguageChange={onLanguageChange} user={user} isOnline={isOnline} />
+        <SettingsPanel language={language} onLanguageChange={onLanguageChange} user={user} isOnline={isOnline} uid={uid} userRole={userRole} />
       )}
       {activeMenu === "templates" && canManageTemplates && (
-        <TemplateManager uid={uid} isOnline={isOnline} language={language} />
+        <section className="stack">
+          <TemplateManager uid={uid} isOnline={isOnline} language={language} />
+          <InsurerManager uid={uid} isOnline={isOnline} language={language} />
+        </section>
       )}
     </main>
   );

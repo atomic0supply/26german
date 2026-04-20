@@ -1783,3 +1783,29 @@ button.ghost.small.danger:hover {
   font-size: 0.875rem;
   color: var(--ink-muted);
 }
+
+/* ── PWA Install Banner ───────────────────────────────────────── */
+.pwa-install-banner {
+  position: fixed;
+  bottom: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--bg-panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 0.85rem 1.1rem;
+  z-index: 200;
+  max-width: min(480px, calc(100vw - 2rem));
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.pwa-install-banner__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}

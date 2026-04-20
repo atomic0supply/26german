@@ -21,6 +21,7 @@ import { COMPANY_OPTIONS, REPORT_TEMPLATE, resolveReportTemplateName } from "../
 import { Language, localeForLanguage, translate } from "../i18n";
 import { createDefaultReport } from "../lib/defaultReport";
 import { toIsoString } from "../lib/firestore";
+import { BrandingConfig } from "../lib/useBranding";
 import { ClientData, CompanyId, ReportListItem, UserRole } from "../types";
 import { AdminPanel } from "./AdminPanel";
 import { CustomerWorkspace } from "./CustomerWorkspace";
@@ -41,6 +42,7 @@ interface ReportListProps {
   onOpenReport: (id: string) => void;
   language: Language;
   onLanguageChange: (language: Language) => void;
+  branding: BrandingConfig;
 }
 
 const getClientFullName = (client?: Pick<ClientData, "name" | "surname"> | null) =>
@@ -177,7 +179,7 @@ const ReportsWorkspace = ({
   );
 };
 
-export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, language, onLanguageChange }: ReportListProps) => {
+export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, language, onLanguageChange, branding }: ReportListProps) => {
   const [activeMenu, setActiveMenu] = useState<"home" | "agenda" | "clients" | "reports" | "admin">("home");
   const [reports, setReports] = useState<ReportListItem[]>([]);
   const [clients, setClients] = useState<ClientData[]>([]);
@@ -535,8 +537,9 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   return (
     <AppShell
-      brandTitle={t("LeakOps CRM", "LeakOps CRM")}
+      brandTitle={branding.companyName}
       brandSubtitle={t("Inspección, clientes e informes en una sola vista.", "Inspektion, Kunden und Berichte in einer Oberfläche.")}
+      logoUrl={branding.logoUrl || undefined}
       pageTitle={pageTitle}
       pageSubtitle={pageSubtitle}
       language={language}

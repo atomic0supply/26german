@@ -8,6 +8,7 @@ import { SidebarNavItem } from "./SidebarNav";
 interface AppShellProps {
   brandTitle: string;
   brandSubtitle?: string;
+  logoUrl?: string;
   pageTitle: string;
   pageSubtitle?: string;
   user: User;
@@ -76,6 +77,7 @@ const NavIcon = ({ id }: { id: string }) => {
 export const AppShell = ({
   brandTitle,
   brandSubtitle,
+  logoUrl,
   pageTitle,
   pageSubtitle,
   user,
@@ -97,6 +99,7 @@ export const AppShell = ({
     <div className="app-shell">
       <aside className="app-rail">
         <div className="app-rail__brand">
+          {logoUrl && <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />}
           <span className="app-rail__eyebrow">{t("CRM operativo", "Operatives CRM")}</span>
           <h1>{brandTitle}</h1>
           {brandSubtitle && <p>{brandSubtitle}</p>}
@@ -166,6 +169,10 @@ export const AppShell = ({
         </header>
 
         <main className="app-stage__content">{children}</main>
+
+        <PwaInstallPrompt language={language} />
+
+        <footer className="app-footer">© 2026 FormetaLabs. Todos los derechos reservados.</footer>
 
         <nav className="app-bottom-nav" aria-label={t("Navegación móvil", "Mobile Navigation")}>
           {navItems.map((item) => (

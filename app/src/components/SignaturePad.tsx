@@ -1,14 +1,17 @@
 import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import { Language, translate } from "../i18n";
 
 interface SignaturePadProps {
   initialValue?: string;
   disabled?: boolean;
+  language: Language;
   onChange: (dataUrl: string) => void;
 }
 
-export const SignaturePad = ({ initialValue, disabled, onChange }: SignaturePadProps) => {
+export const SignaturePad = ({ initialValue, disabled, language, onChange }: SignaturePadProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
+  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -123,6 +126,7 @@ export const SignaturePad = ({ initialValue, disabled, onChange }: SignaturePadP
         width={560}
         height={180}
         className="signature-canvas"
+        aria-label={t("Signaturfeld", "Campo de firma")}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -130,10 +134,10 @@ export const SignaturePad = ({ initialValue, disabled, onChange }: SignaturePadP
       />
       <div className="signature-actions">
         <button type="button" onClick={clear} disabled={disabled}>
-          Leeren
+          {t("Leeren", "Borrar")}
         </button>
         <button type="button" onClick={commit} disabled={disabled}>
-          Signatur übernehmen
+          {t("Signatur übernehmen", "Guardar firma")}
         </button>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { REPORT_TEMPLATE } from "../src/templates";
 import { validateReportForFinalize } from "../src/validation";
-import { DEFAULT_TEMPLATES } from "../src/templates";
 import { ReportData } from "../src/types";
 
 const baseReport = (): ReportData => ({
@@ -61,7 +61,7 @@ describe("validateReportForFinalize", () => {
     const report = baseReport();
     report.templateFields.claimNumber = "";
 
-    const errors = validateReportForFinalize(report, DEFAULT_TEMPLATES.svt.requiredTemplateFields);
+    const errors = validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields);
     expect(errors).toContain("templateFields.claimNumber ist erforderlich");
   });
 });

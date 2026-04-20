@@ -24,11 +24,24 @@ interface ClientManagerProps {
 export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) => {
   const [clients, setClients] = useState<ClientData[]>([]);
   const [editingClientId, setEditingClientId] = useState("");
-  const [editingDraft, setEditingDraft] = useState<{ email: string; phone: string; location: string }>({
+  const [editingDraft, setEditingDraft] = useState<{
+    name: string;
+    surname: string;
+    principalContact: string;
+    email: string;
+    phone: string;
+    location: string;
+  }>({
+    name: "",
+    surname: "",
+    principalContact: "",
     email: "",
     phone: "",
     location: ""
   });
+  const [name, setName] = useState("");
+  const [surname, setSurname] = useState("");
+  const [principalContact, setPrincipalContact] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
@@ -50,6 +63,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
             const data = item.data();
             return {
               id: item.id,
+              name: String(data.name ?? ""),
+              surname: String(data.surname ?? ""),
+              principalContact: String(data.principalContact ?? ""),
               email: String(data.email ?? ""),
               phone: String(data.phone ?? ""),
               location: String(data.location ?? ""),
@@ -58,7 +74,7 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
               updatedAt: toIsoString(data.updatedAt)
           } satisfies ClientData;
         })
-          .sort((left, right) => left.email.localeCompare(right.email, locale));
+          .sort((left, right) => `${left.name} ${left.surname}`.localeCompare(`${right.name} ${right.surname}`, locale));
 
         setClients(next);
         setLoading(false);
@@ -80,8 +96,13 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
       return;
     }
 
-    if (!email.trim() || !location.trim()) {
-      setError(t("Bitte mindestens E-Mail und Standort ausfüllen.", "Rellena al menos correo y ubicación."));
+    if (!name.trim() || !surname.trim() || !principalContact.trim() || !email.trim() || !phone.trim() || !location.trim()) {
+      setError(
+        t(
+          "Bitte Name, Nachname, Hauptkontakt, E-Mail, Telefon und Standort ausfüllen.",
+          "Completa nombre, apellido, contacto principal, correo, teléfono y ubicación."
+        )
+      );
       return;
     }
 
@@ -91,6 +112,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
 
     try {
       await addDoc(collection(db, "clients"), {
+        name: name.trim(),
+        surname: surname.trim(),
+        principalContact: principalContact.trim(),
         email: email.trim(),
         phone: phone.trim(),
         location: location.trim(),
@@ -99,6 +123,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
         updatedAt: serverTimestamp()
       });
 
+      setName("");
+      setSurname("");
+      setPrincipalContact("");
       setEmail("");
       setPhone("");
       setLocation("");
@@ -123,6 +150,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
 
     try {
       await updateDoc(doc(db, "clients", client.id), {
+        name: client.name.trim(),
+        surname: client.surname.trim(),
+        principalContact: client.principalContact.trim(),
         email: client.email.trim(),
         phone: client.phone.trim(),
         location: client.location.trim(),
@@ -170,6 +200,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
   const startEditClient = (client: ClientData) => {
     setEditingClientId(client.id);
     setEditingDraft({
+      name: client.name,
+      surname: client.surname,
+      principalContact: client.principalContact,
       email: client.email,
       phone: client.phone,
       location: client.location
@@ -178,7 +211,10 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
     setNotice("");
   };
 
-  const updateEditingDraft = (key: "email" | "phone" | "location", value: string) => {
+  const updateEditingDraft = (
+    key: "name" | "surname" | "principalContact" | "email" | "phone" | "location",
+    value: string
+  ) => {
     setEditingDraft((previous) => ({
       ...previous,
       [key]: value
@@ -188,6 +224,9 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
   const saveEditingClient = async (client: ClientData) => {
     await saveClient({
       ...client,
+      name: editingDraft.name,
+      surname: editingDraft.surname,
+      principalContact: editingDraft.principalContact,
       email: editingDraft.email,
       phone: editingDraft.phone,
       location: editingDraft.location
@@ -209,6 +248,21 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
 
       <form className="stack" onSubmit={createClient}>
         <div className="grid three">
+          <label>
+            {t("Name", "Nombre")}
+            <input value={name} onChange={(event) => setName(event.target.value)} required />
+          </label>
+
+          <label>
+            {t("Nachname", "Apellido")}
+            <input value={surname} onChange={(event) => setSurname(event.target.value)} required />
+          </label>
+
+          <label>
+            {t("Hauptkontakt", "Contacto principal")}
+            <input value={principalContact} onChange={(event) => setPrincipalContact(event.target.value)} required />
+          </label>
+
           <label>
             {t("E-Mail", "Correo")}
             <input
@@ -262,6 +316,30 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
               </label>
 
               <label>
+                {t("Name", "Nombre")}
+                <input
+                  value={editingDraft.name}
+                  onChange={(event) => updateEditingDraft("name", event.target.value)}
+                />
+              </label>
+
+              <label>
+                {t("Nachname", "Apellido")}
+                <input
+                  value={editingDraft.surname}
+                  onChange={(event) => updateEditingDraft("surname", event.target.value)}
+                />
+              </label>
+
+              <label>
+                {t("Hauptkontakt", "Contacto principal")}
+                <input
+                  value={editingDraft.principalContact}
+                  onChange={(event) => updateEditingDraft("principalContact", event.target.value)}
+                />
+              </label>
+
+              <label>
                 {t("Telefon", "Teléfono")}
                 <input
                   value={editingDraft.phone}
@@ -292,6 +370,8 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
           ) : (
             <>
               <div className="client-summary">
+                <p><strong>{t("Name", "Nombre")}:</strong> {[client.name, client.surname].filter(Boolean).join(" ") || "-"}</p>
+                <p><strong>{t("Hauptkontakt", "Contacto principal")}:</strong> {client.principalContact || "-"}</p>
                 <p><strong>{t("E-Mail", "Correo")}:</strong> {client.email || "-"}</p>
                 <p><strong>{t("Telefon", "Teléfono")}:</strong> {client.phone || "-"}</p>
                 <p><strong>{t("Standort", "Ubicación")}:</strong> {client.location || "-"}</p>

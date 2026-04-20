@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { TEMPLATE_OPTIONS_BY_ID } from "../../src/constants";
+import { REPORT_TEMPLATE } from "../../src/constants";
 import { createDefaultReport } from "../../src/lib/defaultReport";
 import { validateReportForFinalize } from "../../src/lib/validation";
-import { BuiltinTemplateId } from "../../src/types";
 
 describe("validateReportForFinalize", () => {
   it("returns errors when required fields are missing", () => {
@@ -12,6 +11,15 @@ describe("validateReportForFinalize", () => {
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.join(" ")).toContain("Projektnummer");
     expect(errors.join(" ")).toContain("Techniker-Signatur");
+  });
+
+  it("returns translated validation errors in Spanish", () => {
+    const report = createDefaultReport("uid-1");
+    const errors = validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, "es");
+
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.join(" ")).toContain("Número de proyecto");
+    expect(errors.join(" ")).toContain("Firma del técnico");
   });
 
   it("passes when all required fields exist", () => {
@@ -25,8 +33,6 @@ describe("validateReportForFinalize", () => {
     report.templateFields.insuranceName = "Versicherung A";
     report.templateFields.claimNumber = "CL-9";
 
-    expect(
-      validateReportForFinalize(report, TEMPLATE_OPTIONS_BY_ID[report.brandTemplateId as BuiltinTemplateId].requiredTemplateFields)
-    ).toEqual([]);
+    expect(validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields)).toEqual([]);
   });
 });

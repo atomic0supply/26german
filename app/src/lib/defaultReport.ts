@@ -1,5 +1,5 @@
-import { ATTENDEE_OPTIONS, ACTION_OPTIONS, DAMAGE_OPTIONS, TEMPLATE_FIELD_DEFINITIONS } from "../constants";
-import { ReportData, TemplateId } from "../types";
+import { ACTION_OPTIONS, ATTENDEE_OPTIONS, DAMAGE_OPTIONS, REPORT_TEMPLATE } from "../constants";
+import { CompanyId, ReportData } from "../types";
 
 const buildFlagMap = <T extends string>(keys: T[]) =>
   keys.reduce(
@@ -10,16 +10,14 @@ const buildFlagMap = <T extends string>(keys: T[]) =>
     {} as Record<T, boolean>
   );
 
-export const createDefaultReport = (uid: string, template: TemplateId = "svt"): ReportData => {
+export const createDefaultReport = (uid: string, companyId?: CompanyId): ReportData => {
   const now = new Date().toISOString();
-  const templateFields = TEMPLATE_FIELD_DEFINITIONS.reduce<Record<string, string | boolean>>((acc, field) => {
-    acc[field.key] = field.type === "checkbox" ? false : "";
-    return acc;
-  }, {});
 
   return {
     clientId: "",
-    brandTemplateId: template,
+    brandTemplateId: REPORT_TEMPLATE.id,
+    companyId,
+    templateName: REPORT_TEMPLATE.name,
     projectInfo: {
       projectNumber: "",
       appointmentDate: "",
@@ -68,9 +66,7 @@ export const createDefaultReport = (uid: string, template: TemplateId = "svt"): 
       to: "",
       workingTimeHours: ""
     },
-    templateFields,
-    templateAssetPaths: {},
-    templateAssetUrls: {},
+    templateFields: {},
     signature: {
       technicianName: "",
       signedAt: ""

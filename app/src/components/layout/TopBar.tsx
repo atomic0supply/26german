@@ -1,5 +1,6 @@
 import { User } from "firebase/auth";
 import { Language, translate } from "../../i18n";
+import { LanguageSwitch } from "../LanguageSwitch";
 
 interface TopBarProps {
   title: string;
@@ -46,22 +47,7 @@ export const TopBar = ({
         <span className={isOnline ? "status-pill online" : "status-pill offline"}>
           {isOnline ? t("Online", "En línea") : t("Offline", "Sin conexión")}
         </span>
-        <div className="language-switch" aria-label={t("Sprache", "Idioma")}>
-          <button
-            type="button"
-            className={language === "de" ? "language-switch__item active" : "language-switch__item"}
-            onClick={() => onLanguageChange("de")}
-          >
-            DE
-          </button>
-          <button
-            type="button"
-            className={language === "es" ? "language-switch__item active" : "language-switch__item"}
-            onClick={() => onLanguageChange("es")}
-          >
-            ES
-          </button>
-        </div>
+        <LanguageSwitch language={language} onLanguageChange={onLanguageChange} />
         <div className="app-user-chip">
           <strong>{userLabel}</strong>
           <small>{userRoleLabel}</small>

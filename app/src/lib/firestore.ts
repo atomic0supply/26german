@@ -61,19 +61,6 @@ const normalizeTemplateFields = (value: unknown): Record<string, TemplateFieldVa
   return next;
 };
 
-const normalizeStringMap = (value: unknown): Record<string, string> => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((acc, [key, raw]) => {
-    if (raw !== undefined && raw !== null) {
-      acc[key] = String(raw);
-    }
-    return acc;
-  }, {});
-};
-
 export const normalizeReportData = (raw: unknown): ReportData => {
   const source = (raw ?? {}) as Partial<ReportData>;
   const fallback = createDefaultReport(source.createdBy ?? "");
@@ -81,6 +68,8 @@ export const normalizeReportData = (raw: unknown): ReportData => {
   return {
     ...fallback,
     ...source,
+    brandTemplateId: fallback.brandTemplateId,
+    templateName: source.templateName ?? fallback.templateName,
     clientId: source.clientId ?? fallback.clientId,
     projectInfo: { ...fallback.projectInfo, ...(source.projectInfo ?? {}) },
     contacts: { ...fallback.contacts, ...(source.contacts ?? {}) },
@@ -115,14 +104,6 @@ export const normalizeReportData = (raw: unknown): ReportData => {
     templateFields: {
       ...fallback.templateFields,
       ...normalizeTemplateFields(source.templateFields)
-    },
-    templateAssetPaths: {
-      ...(fallback.templateAssetPaths ?? {}),
-      ...normalizeStringMap(source.templateAssetPaths)
-    },
-    templateAssetUrls: {
-      ...(fallback.templateAssetUrls ?? {}),
-      ...normalizeStringMap(source.templateAssetUrls)
     },
     signature: { ...fallback.signature, ...(source.signature ?? {}) },
     createdAt: toIsoString(source.createdAt ?? fallback.createdAt),

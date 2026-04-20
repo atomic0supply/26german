@@ -30,7 +30,8 @@ suite("firestore rules", () => {
       const db = context.firestore();
       await setDoc(doc(db, "users/tech-1"), { role: "technician", active: true });
       await setDoc(doc(db, "users/tech-2"), { role: "technician", active: true });
-      await setDoc(doc(db, "templates/svt"), { id: "svt", name: "SVT" });
+      await setDoc(doc(db, "users/office-1"), { role: "office", active: true });
+      await setDoc(doc(db, "users/admin-1"), { role: "admin", active: true });
       await setDoc(doc(db, "clients/client-1"), {
         createdBy: "tech-1",
         email: "kunde@example.com",
@@ -82,13 +83,6 @@ suite("firestore rules", () => {
     await assertFails(deleteDoc(doc(db, "reports/report-final")));
   });
 
-  it("allows technician to read templates", async () => {
-    const ctx = testEnv.authenticatedContext("tech-1");
-    const db = ctx.firestore();
-
-    await assertSucceeds(getDoc(doc(db, "templates/svt")));
-  });
-
   it("denies access to another technician report", async () => {
     const ctx = testEnv.authenticatedContext("tech-2");
     const db = ctx.firestore();
@@ -109,5 +103,27 @@ suite("firestore rules", () => {
     const db = ctx.firestore();
 
     await assertFails(getDoc(doc(db, "clients/client-1")));
+  });
+
+  it("allows office to read another technician report but not update it", async () => {
+    const ctx = testEnv.authenticatedContext("office-1");
+    const db = ctx.firestore();
+
+    await assertSucceeds(getDoc(doc(db, "reports/report-1")));
+    await assertFails(updateDoc(doc(db, "reports/report-1"), { "projectInfo.projectNumber": "OFFICE-TRY", status: "draft" }));
+  });
+
+  it("allows office to read another technician client", async () => {
+    const ctx = testEnv.authenticatedContext("office-1");
+    const db = ctx.firestore();
+
+    await assertSucceeds(getDoc(doc(db, "clients/client-1")));
+  });
+
+  it("allows admin to read another technician report", async () => {
+    const ctx = testEnv.authenticatedContext("admin-1");
+    const db = ctx.firestore();
+
+    await assertSucceeds(getDoc(doc(db, "reports/report-1")));
   });
 });

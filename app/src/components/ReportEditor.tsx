@@ -1,8 +1,7 @@
-import { ChangeEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
-  getDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -15,73 +14,136 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import {
   ACTION_OPTIONS,
   ATTENDEE_OPTIONS,
+  COMPANY_OPTIONS,
   DAMAGE_OPTIONS,
   PHOTO_SLOTS,
+  REPORT_TEMPLATE,
   TECHNIQUE_OPTIONS,
-  TEMPLATE_OPTIONS_BY_ID
+  getLocalizedOptionLabel,
+  getLocalizedTechniqueLabel,
+  resolveReportTemplateName
 } from "../constants";
 import { db, functions, storage } from "../firebase";
+import { Language, localeForLanguage, translate } from "../i18n";
 import { normalizeReportData } from "../lib/firestore";
 import { validateReportForFinalize } from "../lib/validation";
-import { ClientData, FinalizeReportResult, ReportData, TemplateFieldSchema, TemplateVersion } from "../types";
+import { ClientData, CompanyId, FinalizeReportResult, ReportData, ReportPhoto } from "../types";
+import { PhotoAnnotation, PhotoAnnotatorLite } from "./PhotoAnnotatorLite";
 import { SignaturePad } from "./SignaturePad";
+import { ActionBar } from "./ui/ActionBar";
+import { EmptyState } from "./ui/EmptyState";
+import { ProgressStepper } from "./ui/ProgressStepper";
+import { SectionCard } from "./ui/SectionCard";
+import { SkeletonBlock } from "./ui/SkeletonBlock";
+import { StatusChip } from "./ui/StatusChip";
 
 interface ReportEditorProps {
   reportId: string;
   uid: string;
+  userRole: "technician" | "admin" | "office";
   isOnline: boolean;
+  language: Language;
   onBack: () => void;
 }
+
+type StepId = "recipient" | "client" | "technical" | "photos" | "signature" | "review";
+
+const STEPS: StepId[] = ["recipient", "client", "technical", "photos", "signature", "review"];
+
+const ANNOTATION_PREFIX = "photoAnnotation:";
+
+const stepIndex = (step: StepId) => STEPS.indexOf(step);
 
 const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
   const response = await fetch(dataUrl);
   return response.blob();
 };
 
-const EditorSection = ({
-  title,
-  description,
-  collapsed,
-  onToggle,
-  children
-}: {
-  title: string;
-  description?: string;
-  collapsed: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) => (
-  <section className="editor-section-card">
-    <button type="button" className="editor-section-header" onClick={onToggle}>
-      <span>
-        <strong>{title}</strong>
-        {description && <small>{description}</small>}
-      </span>
-      <span>{collapsed ? "+" : "-"}</span>
-    </button>
-    {!collapsed && <div className="editor-section-body stack">{children}</div>}
-  </section>
-);
+// Firestore rejects `undefined` values; strip them recursively before any updateDoc call.
+const stripUndefined = <T,>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value.map(stripUndefined) as unknown as T;
+  }
+  if (value !== null && typeof value === "object" && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, stripUndefined(v)])
+    ) as T;
+  }
+  return value;
+};
 
-export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorProps) => {
+const reportFingerprint = (report: ReportData) =>
+  JSON.stringify({
+    ...report,
+    createdAt: undefined,
+    updatedAt: undefined,
+    finalization: undefined
+  });
+
+const readAnnotations = (report: ReportData, slot: number): PhotoAnnotation[] => {
+  const raw = report.templateFields[`${ANNOTATION_PREFIX}${slot}`];
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PhotoAnnotation[];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item && typeof item.id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const getClientFullName = (client: Pick<ClientData, "name" | "surname">) =>
+  [client.name, client.surname].map((value) => value.trim()).filter(Boolean).join(" ");
+
+const getClientLabel = (client: ClientData) =>
+  [getClientFullName(client), client.location, client.email].filter(Boolean).join(" · ");
+
+const getStepText = (step: StepId, language: Language) => {
+  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  switch (step) {
+    case "recipient":
+      return t("Empresa", "Unternehmen");
+    case "client":
+      return t("Cliente", "Kunde");
+    case "technical":
+      return t("Técnica", "Technik");
+    case "photos":
+      return t("Fotos", "Fotos");
+    case "signature":
+      return t("Firma", "Signatur");
+    case "review":
+      return t("Revisión", "Prüfung");
+    default:
+      return step;
+  }
+};
+
+export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBack }: ReportEditorProps) => {
+  const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; });
+  const locale = localeForLanguage(language);
   const [report, setReport] = useState<ReportData | null>(null);
+  const [clients, setClients] = useState<ClientData[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "dirty" | "saving" | "saved">("idle");
+  const [activeStep, setActiveStep] = useState<StepId>("recipient");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [clients, setClients] = useState<ClientData[]>([]);
-  const [customTemplateVersion, setCustomTemplateVersion] = useState<TemplateVersion | null>(null);
-  const [editorViewMode, setEditorViewMode] = useState<"split" | "form" | "preview">("split");
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
-    contacts: true,
-    advanced: true
-  });
+  const [lastSavedAt, setLastSavedAt] = useState("");
   const previewBlobUrlRef = useRef("");
-  const previewRequestIdRef = useRef(0);
-  const templatePreviewInitRef = useRef<string | null>(null);
-
+  const initializedRef = useRef(false);
+  const lastPersistedFingerprintRef = useRef("");
+  const autosaveTimerRef = useRef<number | null>(null);
   const reportRef = useMemo(() => doc(db, "reports", reportId), [reportId]);
 
   useEffect(() => {
@@ -89,13 +151,16 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       reportRef,
       (snapshot) => {
         if (!snapshot.exists()) {
-          setError("Bericht wurde nicht gefunden.");
+          setError(tRef.current("El informe no existe.", "Bericht existiert nicht."));
           setLoading(false);
           return;
         }
 
-        const parsed = normalizeReportData(snapshot.data());
-        setReport(parsed);
+        const next = normalizeReportData(snapshot.data());
+        setReport(next);
+        setLastSavedAt(next.updatedAt);
+        lastPersistedFingerprintRef.current = reportFingerprint(next);
+        initializedRef.current = true;
         setLoading(false);
       },
       (snapshotError) => {
@@ -108,13 +173,19 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
   }, [reportRef]);
 
   useEffect(() => {
-    const clientsQuery = query(collection(db, "clients"), where("createdBy", "==", uid));
+    const clientsRef = collection(db, "clients");
+    const clientsQuery = userRole === "admin" || userRole === "office"
+      ? query(clientsRef)
+      : query(clientsRef, where("createdBy", "==", uid));
     const unsubscribe = onSnapshot(clientsQuery, (snapshot) => {
       const next = snapshot.docs
         .map((item) => {
           const data = item.data();
           return {
             id: item.id,
+            name: String(data.name ?? ""),
+            surname: String(data.surname ?? ""),
+            principalContact: String(data.principalContact ?? ""),
             email: String(data.email ?? ""),
             phone: String(data.phone ?? ""),
             location: String(data.location ?? ""),
@@ -123,258 +194,172 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
             updatedAt: String(data.updatedAt ?? "")
           } satisfies ClientData;
         })
-        .sort((left, right) => left.email.localeCompare(right.email, "de"));
+        .sort((left, right) => getClientLabel(left).localeCompare(getClientLabel(right), locale));
       setClients(next);
     });
 
     return unsubscribe;
-  }, [uid]);
+  }, [locale, uid, userRole]);
 
   useEffect(() => {
     return () => {
       if (previewBlobUrlRef.current) {
         URL.revokeObjectURL(previewBlobUrlRef.current);
       }
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
     };
   }, []);
-
-  useEffect(() => {
-    if (!report?.templateRef || !report.templateVersionRef) {
-      setCustomTemplateVersion(null);
-      return;
-    }
-
-    const templateVersionRef = doc(db, `templates/${report.templateRef}/versions/${report.templateVersionRef}`);
-    const unsubscribe = onSnapshot(
-      templateVersionRef,
-      (snapshot) => {
-        if (!snapshot.exists()) {
-          setCustomTemplateVersion(null);
-          return;
-        }
-
-        setCustomTemplateVersion({
-          id: snapshot.id,
-          ...(snapshot.data() as Omit<TemplateVersion, "id">)
-        });
-      },
-      () => {
-        setCustomTemplateVersion(null);
-      }
-    );
-
-    return unsubscribe;
-  }, [report?.templateRef, report?.templateVersionRef]);
-
-  const readOnly = saving || !isOnline || report?.status === "finalized";
-  const toggleSection = (key: string) => {
-    setCollapsedSections((previous) => ({
-      ...previous,
-      [key]: !previous[key]
-    }));
-  };
-
-  const customDynamicFields = useMemo(
-    () =>
-      (customTemplateVersion?.fieldSchema ?? []).filter(
-        (field) => field.source === "dynamic"
-      ),
-    [customTemplateVersion]
-  );
-
-  const customAssetFields = useMemo(
-    () =>
-      (customTemplateVersion?.fieldSchema ?? []).filter(
-        (field) => field.source === "image"
-      ),
-    [customTemplateVersion]
-  );
-
-  const customSignatureFields = useMemo(
-    () =>
-      (customTemplateVersion?.fieldSchema ?? []).filter(
-        (field) => field.source === "signature"
-      ),
-    [customTemplateVersion]
-  );
-
-  const requiredTemplateFields = useMemo(() => {
-    if (report?.brandTemplateId === "custom") {
-      return customDynamicFields
-        .filter((field) => field.required)
-        .map((field) => `templateFields.${field.id}`);
-    }
-
-    return report ? (TEMPLATE_OPTIONS_BY_ID[report.brandTemplateId]?.requiredTemplateFields ?? []) : [];
-  }, [customDynamicFields, report]);
-
-  const validationErrors = useMemo(
-    () => (report ? validateReportForFinalize(report, requiredTemplateFields) : []),
-    [report, requiredTemplateFields]
-  );
 
   const updateReport = (updater: (previous: ReportData) => ReportData) => {
     setReport((previous) => {
       if (!previous) {
         return previous;
       }
-
       return updater(previous);
     });
   };
 
-  const uploadSignatureIfNeeded = async (current: ReportData): Promise<ReportData> => {
-    if (!current.signature.dataUrl || !current.signature.dataUrl.startsWith("data:image")) {
-      return current;
+  const canEditReport = Boolean(report && report.createdBy === uid);
+  const canViewReport = Boolean(report && (canEditReport || userRole === "admin" || userRole === "office"));
+  const canSendEmail = Boolean(report && (canEditReport || userRole === "admin" || userRole === "office"));
+  const canMutateDraft = Boolean(report && canEditReport && report.status === "draft");
+
+  const persistReport = async (showNotice = false) => {
+    if (!report || !canEditReport || !isOnline || saving || report.status === "finalized") {
+      return null;
     }
 
-    const { dataUrl: _dataUrl, ...signatureWithoutDataUrl } = current.signature;
-    const blob = await dataUrlToBlob(current.signature.dataUrl);
-    const storagePath = `report-signatures/${reportId}/technician.png`;
-    const signatureRef = ref(storage, storagePath);
+    setSaving(true);
+    setSaveState("saving");
+    setError("");
 
-    await uploadBytes(signatureRef, blob, {
-      contentType: "image/png"
-    });
+    try {
+      let next = report;
 
-    const downloadUrl = await getDownloadURL(signatureRef);
-
-    return {
-      ...current,
-      signature: {
-        ...signatureWithoutDataUrl,
-        storagePath,
-        downloadUrl,
-        signedAt: new Date().toISOString()
+      if (next.signature.dataUrl && next.signature.dataUrl.startsWith("data:image")) {
+        const blob = await dataUrlToBlob(next.signature.dataUrl);
+        const storagePath = `report-signatures/${reportId}/technician.png`;
+        const signatureRef = ref(storage, storagePath);
+        await uploadBytes(signatureRef, blob, { contentType: "image/png" });
+        const downloadUrl = await getDownloadURL(signatureRef);
+        next = {
+          ...next,
+          signature: {
+            ...next.signature,
+            storagePath,
+            downloadUrl,
+            signedAt: next.signature.signedAt || new Date().toISOString()
+          }
+        };
       }
-    };
-  };
 
-  const uploadTemplateAsset = async (field: TemplateFieldSchema, file?: File) => {
-    if (!report || !file) {
-      return;
-    }
-
-    if (!isOnline) {
-      setError("Offline: Datei-Upload ist nur online möglich.");
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-
-    try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const storagePath = `report-template-assets/${reportId}/${field.id}-${safeName}`;
-      const assetRef = ref(storage, storagePath);
-
-      await uploadBytes(assetRef, file, { contentType: file.type || "application/octet-stream" });
-      const downloadUrl = await getDownloadURL(assetRef);
-
-      updateReport((previous) => ({
-        ...previous,
-        templateAssetPaths: {
-          ...(previous.templateAssetPaths ?? {}),
-          [field.id]: storagePath
-        },
-        templateAssetUrls: {
-          ...(previous.templateAssetUrls ?? {}),
-          [field.id]: downloadUrl
-        }
-      }));
-
-      setNotice(`Asset für ${field.label} hochgeladen.`);
-    } catch (uploadError) {
-      const message = uploadError instanceof Error ? uploadError.message : "Asset konnte nicht hochgeladen werden";
-      setError(message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const persistReport = async (showNotice = true): Promise<ReportData | null> => {
-    if (!report) {
-      return null;
-    }
-
-    if (!isOnline) {
-      setError("Offline: Speichern ist nur online möglich.");
-      return null;
-    }
-
-    setSaving(true);
-    setError("");
-
-    try {
-      const withSignature = await uploadSignatureIfNeeded(report);
-      const { dataUrl: _transientDataUrl, ...signatureForPersistence } = withSignature.signature;
-      const payload: Record<string, unknown> = {
-        ...withSignature,
-        signature: signatureForPersistence,
+      const { dataUrl: _drop, ...signatureRest } = next.signature;
+      await updateDoc(reportRef, {
+        ...stripUndefined({ ...next, signature: signatureRest }),
         updatedAt: serverTimestamp()
-      };
-      if (!withSignature.finalization) {
-        delete payload.finalization;
-      }
+      });
 
-      await updateDoc(reportRef, payload);
-
-      if (withSignature.photos.length > 0) {
+      if (next.photos.length > 0) {
         await Promise.all(
-          withSignature.photos.map((photo) =>
-            setDoc(doc(db, `reports/${reportId}/photos/${photo.id}`), photo, {
-              merge: true
-            })
+          next.photos.map((photo) =>
+            setDoc(doc(db, `reports/${reportId}/photos/${photo.id}`), photo, { merge: true })
           )
         );
       }
 
-      setReport(withSignature);
+      setReport(next);
+      setLastSavedAt(new Date().toISOString());
+      lastPersistedFingerprintRef.current = reportFingerprint(next);
+      setSaveState("saved");
       if (showNotice) {
-        setNotice("Bericht gespeichert.");
+        setNotice(t("Cambios guardados.", "Änderungen gespeichert."));
       }
-      return withSignature;
+      return next;
     } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : "Bericht konnte nicht gespeichert werden";
-      setError(message);
+      setError(saveError instanceof Error ? saveError.message : t("No se pudo guardar.", "Speichern fehlgeschlagen."));
+      setSaveState("dirty");
       return null;
     } finally {
       setSaving(false);
     }
   };
 
+  useEffect(() => {
+    if (!report || !canEditReport || !initializedRef.current || report.status === "finalized") {
+      return;
+    }
+
+    const fingerprint = reportFingerprint(report);
+    if (fingerprint === lastPersistedFingerprintRef.current) {
+      return;
+    }
+
+    setSaveState("dirty");
+    if (!isOnline || saving) {
+      return;
+    }
+
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+
+    autosaveTimerRef.current = window.setTimeout(() => {
+      void persistReport(false);
+    }, 1200);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
+    };
+  }, [canEditReport, isOnline, report, saving]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
   const handlePhotoUpload = async (slot: number, file?: File) => {
-    if (!report || !file) {
+    if (!report || !file || !canMutateDraft) {
       return;
     }
-
+    if (file.size > MAX_PHOTO_BYTES) {
+      setError(t(
+        `La foto pesa ${(file.size / 1024 / 1024).toFixed(1)} MB. El límite es 10 MB.`,
+        `Das Foto ist ${(file.size / 1024 / 1024).toFixed(1)} MB groß. Limit: 10 MB.`
+      ));
+      return;
+    }
     if (!isOnline) {
-      setError("Offline: Foto-Upload ist nur online möglich.");
+      setError(t("Sin conexión: no se pueden subir fotos.", "Offline: Fotos können nicht hochgeladen werden."));
       return;
     }
 
+    setSaving(true);
     setError("");
 
     try {
       const existing = report.photos.find((item) => item.slot === slot);
       const photoId = existing?.id ?? crypto.randomUUID();
-      const storagePath = `report-photos/${reportId}/${photoId}-${file.name}`;
+      const storagePath = `report-photos/${reportId}/${slot}-${photoId}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const photoRef = ref(storage, storagePath);
-
-      await uploadBytes(photoRef, file, { contentType: file.type });
+      await uploadBytes(photoRef, file, { contentType: file.type || "image/jpeg" });
       const downloadUrl = await getDownloadURL(photoRef);
 
-      const nextPhoto = {
+      const nextPhoto: ReportPhoto = {
         id: photoId,
         slot,
-        location: existing?.location ?? `Bild ${slot}`,
+        location: existing?.location ?? t(`Zona ${slot}`, `Bereich ${slot}`),
         documentation: existing?.documentation ?? "",
         storagePath,
         downloadUrl,
         uploadedAt: new Date().toISOString()
       };
-
-      await setDoc(doc(db, `reports/${reportId}/photos/${photoId}`), nextPhoto, { merge: true });
 
       updateReport((previous) => {
         const remaining = previous.photos.filter((photo) => photo.slot !== slot);
@@ -383,27 +368,30 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
           photos: [...remaining, nextPhoto].sort((left, right) => left.slot - right.slot)
         };
       });
-
-      setNotice(`Foto für Slot ${slot} hochgeladen.`);
+      setNotice(t("Foto subida.", "Foto hochgeladen."));
     } catch (uploadError) {
-      const message = uploadError instanceof Error ? uploadError.message : "Foto konnte nicht hochgeladen werden";
-      setError(message);
+      setError(uploadError instanceof Error ? uploadError.message : t("No se pudo subir la foto.", "Foto konnte nicht hochgeladen werden."));
+    } finally {
+      setSaving(false);
     }
   };
 
   const updatePhotoMeta = (slot: number, key: "location" | "documentation", value: string) => {
+    if (!canMutateDraft) {
+      return;
+    }
+
     updateReport((previous) => {
       const current = previous.photos.find((photo) => photo.slot === slot);
-      const next = {
+      const next: ReportPhoto = {
         id: current?.id ?? crypto.randomUUID(),
         slot,
-        location: key === "location" ? value : current?.location ?? `Bild ${slot}`,
+        location: key === "location" ? value : current?.location ?? "",
         documentation: key === "documentation" ? value : current?.documentation ?? "",
         storagePath: current?.storagePath ?? "",
         downloadUrl: current?.downloadUrl ?? "",
         uploadedAt: current?.uploadedAt ?? new Date().toISOString()
       };
-
       const remaining = previous.photos.filter((photo) => photo.slot !== slot);
       return {
         ...previous,
@@ -412,67 +400,36 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
     });
   };
 
-  const finalizeReport = async () => {
-    const persisted = await persistReport(false);
-    if (!persisted) {
+  const updateAnnotations = (slot: number, annotations: PhotoAnnotation[]) => {
+    if (!canMutateDraft) {
       return;
     }
 
-    const validationErrors = validateReportForFinalize(persisted, requiredTemplateFields);
-    if (validationErrors.length > 0) {
-      setError(validationErrors.join(" "));
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-
-    try {
-      const callable = httpsCallable<{ reportId: string }, FinalizeReportResult>(functions, "finalizeReport");
-      const result = await callable({ reportId });
-      setNotice(`Bericht finalisiert am ${new Date(result.data.finalizedAt).toLocaleString("de-DE")}`);
-      previewRequestIdRef.current += 1;
-      setPreviewLoading(false);
-
-      if (previewBlobUrlRef.current) {
-        URL.revokeObjectURL(previewBlobUrlRef.current);
-        previewBlobUrlRef.current = "";
+    updateReport((previous) => ({
+      ...previous,
+      templateFields: {
+        ...previous.templateFields,
+        [`${ANNOTATION_PREFIX}${slot}`]: JSON.stringify(annotations)
       }
-      setPreviewUrl(result.data.pdfUrl);
-
-      const latest = await getDoc(reportRef);
-      if (latest.exists()) {
-        setReport(normalizeReportData(latest.data()));
-      }
-    } catch (finalizeError) {
-      const message = finalizeError instanceof Error ? finalizeError.message : "Finalisierung fehlgeschlagen";
-      setError(message);
-    } finally {
-      setSaving(false);
-    }
+    }));
   };
 
   const previewPdf = async () => {
-    const persisted = await persistReport(false);
-    if (!persisted) {
+    if (!report || !canViewReport) {
       return;
     }
-
-    const requestId = previewRequestIdRef.current + 1;
-    previewRequestIdRef.current = requestId;
-    setPreviewLoading(true);
-    setError("");
-
-    try {
-      const callable = httpsCallable<
-        { reportId: string },
-        { previewUrl?: string; previewBase64?: string; mimeType?: string }
-      >(functions, "previewPdf");
-      const result = await callable({ reportId });
-
-      if (requestId !== previewRequestIdRef.current) {
+    if (canEditReport) {
+      const persisted = await persistReport(false);
+      if (!persisted) {
         return;
       }
+    }
+
+    setPreviewLoading(true);
+    setError("");
+    try {
+      const callable = httpsCallable<{ reportId: string }, { previewBase64?: string; mimeType?: string }>(functions, "previewPdf");
+      const result = await callable({ reportId });
 
       if (previewBlobUrlRef.current) {
         URL.revokeObjectURL(previewBlobUrlRef.current);
@@ -480,974 +437,863 @@ export const ReportEditor = ({ reportId, uid, isOnline, onBack }: ReportEditorPr
       }
 
       if (result.data.previewBase64) {
-        const mimeType = result.data.mimeType || "application/pdf";
         const binary = atob(result.data.previewBase64);
         const bytes = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index += 1) {
           bytes[index] = binary.charCodeAt(index);
         }
-        const blob = new Blob([bytes], { type: mimeType });
+        const blob = new Blob([bytes], { type: result.data.mimeType ?? "application/pdf" });
         const objectUrl = URL.createObjectURL(blob);
         previewBlobUrlRef.current = objectUrl;
         setPreviewUrl(objectUrl);
-      } else if (result.data.previewUrl) {
-        setPreviewUrl(result.data.previewUrl);
-      } else {
-        setPreviewUrl("");
       }
-
-      setNotice("PDF-Vorschau erstellt.");
     } catch (previewError) {
-      const message = previewError instanceof Error ? previewError.message : "Vorschau konnte nicht erzeugt werden";
-      setError(message);
+      setError(previewError instanceof Error ? previewError.message : t("No se pudo generar la vista previa.", "Vorschau konnte nicht erzeugt werden."));
     } finally {
-      if (requestId === previewRequestIdRef.current) {
-        setPreviewLoading(false);
-      }
+      setPreviewLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (!report) {
+  const finalizeReport = async () => {
+    if (!canEditReport) {
+      setError(t("Solo el creador del informe puede finalizarlo.", "Nur der Ersteller kann den Bericht finalisieren."));
+      return;
+    }
+    const persisted = await persistReport(false);
+    if (!persisted) {
       return;
     }
 
-    if (templatePreviewInitRef.current === null) {
-      templatePreviewInitRef.current = report.brandTemplateId;
-      return;
-    }
-
-    if (templatePreviewInitRef.current === report.brandTemplateId) {
-      return;
-    }
-
-    templatePreviewInitRef.current = report.brandTemplateId;
-    if (report.status !== "finalized" && isOnline) {
-      void previewPdf();
-    }
-  }, [report?.brandTemplateId, report?.status, isOnline]);
-
-  const sendPdfByEmail = async () => {
-    if (!report) {
-      return;
-    }
-
-    if (!isOnline) {
-      setError("Offline: E-Mail Versand ist nur online möglich.");
-      return;
-    }
-
-    if (report.status !== "finalized") {
-      setError("Bitte den Bericht zuerst finalisieren.");
-      return;
-    }
-
-    if (!report.clientId) {
-      setError("Bitte zuerst einen Kunden auswählen.");
+    const errors = validateReportForFinalize(persisted, REPORT_TEMPLATE.requiredTemplateFields, language);
+    if (errors.length > 0) {
+      setError(errors.join(" "));
       return;
     }
 
     setSaving(true);
     setError("");
-    setNotice("");
-
     try {
-      const callable = httpsCallable<
-        { reportId: string; clientId: string },
-        { recipient: string; sentAt: string }
-      >(functions, "sendReportEmail");
-
-      const result = await callable({ reportId, clientId: report.clientId });
-      setNotice(`PDF per E-Mail gesendet an ${result.data.recipient} (${new Date(result.data.sentAt).toLocaleString("de-DE")}).`);
-    } catch (emailError) {
-      const message = emailError instanceof Error ? emailError.message : "E-Mail Versand fehlgeschlagen";
-      setError(message);
+      const callable = httpsCallable<{ reportId: string }, FinalizeReportResult>(functions, "finalizeReport");
+      const result = await callable({ reportId });
+      setNotice(
+        t(
+          `Informe finalizado el ${new Date(result.data.finalizedAt).toLocaleString(locale)}.`,
+          `Bericht finalisiert am ${new Date(result.data.finalizedAt).toLocaleString(locale)}.`
+        )
+      );
+      setPreviewUrl(result.data.pdfUrl);
+    } catch (finalizeError) {
+      setError(finalizeError instanceof Error ? finalizeError.message : t("No se pudo finalizar.", "Finalisierung fehlgeschlagen."));
     } finally {
       setSaving(false);
     }
   };
 
+  const sendPdfByEmail = async () => {
+    if (!canSendEmail) {
+      setError(t("No tienes permisos para enviar este informe.", "Du hast keine Berechtigung, diesen Bericht zu senden."));
+      return;
+    }
+    if (!report?.clientId || report.status !== "finalized") {
+      setError(t("Finaliza el informe y vincúlalo a un cliente.", "Bericht finalisieren und Kunden zuordnen."));
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      const callable = httpsCallable<{ reportId: string; clientId: string }, { recipient: string }>(functions, "sendReportEmail");
+      const result = await callable({ reportId, clientId: report.clientId });
+      setNotice(t(`PDF enviado a ${result.data.recipient}.`, `PDF gesendet an ${result.data.recipient}.`));
+    } catch (emailError) {
+      setError(emailError instanceof Error ? emailError.message : t("No se pudo enviar el correo.", "E-Mail konnte nicht gesendet werden."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const validationErrors = report
+    ? validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, language)
+    : [];
+  const selectedClient = report ? clients.find((client) => client.id === report.clientId) ?? null : null;
+
+  const currentStepComplete = (step: StepId) => {
+    if (!report) {
+      return false;
+    }
+
+    switch (step) {
+      case "recipient":
+        return Boolean(report.companyId);
+      case "client":
+        return Boolean(report.clientId) && Boolean(report.projectInfo.locationObject.trim());
+      case "technical":
+        return Boolean(report.projectInfo.projectNumber.trim() && report.projectInfo.technicianName.trim() && report.findings.summary.trim());
+      case "photos":
+        return report.photos.length > 0;
+      case "signature":
+        return Boolean(report.signature.storagePath || report.signature.dataUrl);
+      case "review":
+        return validationErrors.length === 0;
+      default:
+        return false;
+    }
+  };
+
+  const isStepBlocked = (step: StepId) =>
+    STEPS.slice(0, stepIndex(step)).some((previousStep) => !currentStepComplete(previousStep));
+
+  const currentStepState = (step: StepId): "done" | "active" | "todo" | "blocked" => {
+    if (step === activeStep) {
+      return "active";
+    }
+    if (currentStepComplete(step)) {
+      return "done";
+    }
+    if (isStepBlocked(step)) {
+      return "blocked";
+    }
+    return "todo";
+  };
+
+  const canJumpToStep = (step: StepId) => step === activeStep || !isStepBlocked(step);
+  const canAdvance = activeStep !== "review" && currentStepComplete(activeStep);
+  const nextIncompleteStep = STEPS.find((step) => !currentStepComplete(step));
+  const lastSavedLabel = saveState === "saving"
+    ? t("Guardando ahora…", "Speichert gerade…")
+    : saveState === "dirty"
+      ? t("Cambios pendientes por guardar", "Änderungen warten auf Speicherung")
+      : lastSavedAt
+        ? t(
+            `Último guardado ${new Date(lastSavedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}`,
+            `Zuletzt gespeichert ${new Date(lastSavedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}`
+          )
+        : t("Sin cambios todavía", "Noch keine Änderungen");
+
+  const goStep = (direction: -1 | 1) => {
+    const nextIndex = Math.min(STEPS.length - 1, Math.max(0, stepIndex(activeStep) + direction));
+    setActiveStep(STEPS[nextIndex]);
+  };
+
   if (loading) {
     return (
-      <main className="container">
-        <p>Lade Bericht...</p>
+      <main className="report-flow-shell">
+        <div className="workspace-stack">
+          <SkeletonBlock lines={4} />
+          <SkeletonBlock lines={8} />
+        </div>
       </main>
     );
   }
 
-  if (!report) {
+  if (!report || !canViewReport) {
     return (
-      <main className="container stack">
-        <button type="button" className="ghost" onClick={onBack}>
-          Zurück
-        </button>
-        <p className="error">{error || "Bericht konnte nicht geladen werden."}</p>
-      </main>
-    );
-  }
-
-  if (report.createdBy !== uid) {
-    return (
-      <main className="container stack">
-        <button type="button" className="ghost" onClick={onBack}>
-          Zurück
-        </button>
-        <p className="error">Kein Zugriff auf diesen Bericht.</p>
-      </main>
-    );
-  }
-
-  if (report.brandTemplateId !== "custom") {
-    return (
-      <main className="container stack">
-        <button type="button" className="ghost" onClick={onBack}>
-          Zurück
-        </button>
-        <section className="card stack">
-          <h2>Legacy-Bericht</h2>
-          <p>Dieser Bericht gehört noch zum alten Vorlagen-Workflow.</p>
-          <p>Die App arbeitet jetzt nur noch mit veröffentlichten PDF-Vorlagen aus dem visuellen Editor.</p>
-        </section>
+      <main className="report-flow-shell">
+        <SectionCard title={t("Sin acceso al informe", "Kein Zugriff auf den Bericht")} description={error || t("No se pudo cargar el informe.", "Bericht konnte nicht geladen werden.")}>
+          <button type="button" onClick={onBack}>{t("Volver", "Zurück")}</button>
+        </SectionCard>
       </main>
     );
   }
 
   return (
-    <main className="editor-shell">
-      <section className="editor-toolbar surface">
-        <div>
-          <p className="eyebrow">Report Workspace</p>
-          <h1>{report.templateName ?? "Custom Template"}</h1>
-          <p>Projekt {report.projectInfo.projectNumber || "-"} · {report.status === "finalized" ? "Final" : "Entwurf"}</p>
-        </div>
-        <div className="row">
+    <main className="report-flow-shell">
+      <section className="report-flow-hero">
+        <div className="report-flow-hero__copy">
           <button type="button" className="ghost" onClick={onBack}>
-            Zurück
+            {t("Volver", "Zurück")}
           </button>
-          <button type="button" className={editorViewMode === "form" ? "tab active" : "tab"} onClick={() => setEditorViewMode("form")}>
-            Formular
-          </button>
-          <button type="button" className={editorViewMode === "split" ? "tab active" : "tab"} onClick={() => setEditorViewMode("split")}>
-            Split
-          </button>
-          <button type="button" className={editorViewMode === "preview" ? "tab active" : "tab"} onClick={() => setEditorViewMode("preview")}>
-            Preview
-          </button>
-          <button type="button" className="ghost" disabled={readOnly} onClick={() => void persistReport()}>
-            Speichern
-          </button>
-          <button type="button" className="ghost" disabled={readOnly || previewLoading} onClick={previewPdf}>
-            {previewLoading ? "Erzeuge Vorschau..." : "PDF Vorschau"}
-          </button>
-          <button type="button" disabled={readOnly} onClick={finalizeReport}>
-            Finalisieren
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            disabled={saving || !isOnline || report.status !== "finalized" || !report.clientId}
-            onClick={sendPdfByEmail}
-          >
-            PDF per E-Mail senden
-          </button>
+          <span className="report-flow-hero__eyebrow">{t("Informe guiado", "Geführter Bericht")}</span>
+          <h1>{report.projectInfo.projectNumber || t("Nuevo informe", "Neuer Bericht")}</h1>
+          <p>{resolveReportTemplateName(language, report.templateName)} · {report.projectInfo.locationObject || t("Ubicación pendiente", "Ort ausstehend")}</p>
+          <div className="report-flow-hero__meta">
+            <small>{lastSavedLabel}</small>
+            {nextIncompleteStep && (
+              <small>
+                {t("Siguiente foco", "Nächster Fokus")}: {getStepText(nextIncompleteStep, language)}
+              </small>
+            )}
+          </div>
+        </div>
+        <div className="report-flow-hero__status">
+          <StatusChip tone={report.status === "finalized" ? "success" : "warning"}>
+            {report.status === "finalized" ? t("Finalizado", "Finalisiert") : t("Borrador activo", "Aktiver Entwurf")}
+          </StatusChip>
+          <StatusChip tone={isOnline ? "success" : "danger"}>
+            {isOnline ? t("Conexión activa", "Online") : t("Sin conexión", "Offline")}
+          </StatusChip>
+          <StatusChip tone={saveState === "saved" ? "success" : saveState === "saving" ? "info" : saveState === "dirty" ? "warning" : "neutral"}>
+            {saveState === "saved"
+              ? t("Guardado", "Gespeichert")
+              : saveState === "saving"
+                ? t("Guardando", "Speichert")
+                : saveState === "dirty"
+                  ? t("Cambios pendientes", "Ungespeicherte Änderungen")
+                  : t("Sin cambios", "Keine Änderungen")}
+          </StatusChip>
         </div>
       </section>
 
-      {!isOnline && <div className="offline-banner editor-summary-bar">Offline: Diese v1-App unterstützt nur Online-Bearbeitung.</div>}
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
+      <ProgressStepper
+        steps={STEPS.map((step) => ({
+          id: step,
+          label: getStepText(step, language),
+          state: currentStepState(step),
+          disabled: !canJumpToStep(step)
+        }))}
+        activeStep={activeStep}
+        onStepChange={(step) => {
+          const resolvedStep = step as StepId;
+          if (canJumpToStep(resolvedStep)) {
+            setActiveStep(resolvedStep);
+          }
+        }}
+      />
 
-      <section className={editorViewMode === "form" ? "editor-layout form-only" : editorViewMode === "preview" ? "editor-layout preview-only" : "editor-layout"}>
-        <div className="editor-form-pane stack">
-          <div className="surface editor-summary-bar">
-            <strong>{validationErrors.length === 0 ? "Bereit zur Finalisierung" : `${validationErrors.length} offene Punkte`}</strong>
-            <span>{customDynamicFields.length} dynamische Felder · {report.photos.length} Fotos · {previewUrl ? "Preview bereit" : "Noch keine Preview"}</span>
-          </div>
+      {error && <p className="notice-banner error">{error}</p>}
+      {notice && <p className="notice-banner notice">{notice}</p>}
+      {!isOnline && (
+        <p className="notice-banner notice">
+          {t(
+            "Puedes seguir revisando el informe, pero las subidas, el autosave online y el envío quedan en pausa hasta recuperar conexión.",
+            "Du kannst den Bericht weiter prüfen, aber Uploads, Online-Autosave und Versand pausieren bis die Verbindung zurück ist."
+          )}
+        </p>
+      )}
+      {!canEditReport && (
+        <p className="notice-banner notice">
+          {t(
+            "Vista de solo lectura: oficina/admin puede revisar el informe y enviar el PDF final, pero no editar un borrador ajeno.",
+            "Nur-Leseansicht: Büro/Admin kann den Bericht prüfen und das finale PDF senden, aber keinen fremden Entwurf bearbeiten."
+          )}
+        </p>
+      )}
 
-          <EditorSection
-            title="Projekt"
-            description="Vorlage, Termin und Ansprechpartner"
-            collapsed={Boolean(collapsedSections.project)}
-            onToggle={() => toggleSection("project")}
-          >
-            <div className="grid two">
-              <label>
-                Vorlage
-                <input value={report.templateName ?? "Custom Template"} disabled />
-              </label>
-
-              <label>
-                Projektnummer
-                <input
-                  value={report.projectInfo.projectNumber}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      projectInfo: {
-                        ...previous.projectInfo,
-                        projectNumber: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Messtermin
-                <input
-                  type="datetime-local"
-                  value={report.projectInfo.appointmentDate}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      projectInfo: {
-                        ...previous.projectInfo,
-                        appointmentDate: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Messtechniker
-                <input
-                  value={report.projectInfo.technicianName}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      projectInfo: {
-                        ...previous.projectInfo,
-                        technicianName: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Erstmeldung durch
-                <input
-                  value={report.projectInfo.firstReportBy}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      projectInfo: {
-                        ...previous.projectInfo,
-                        firstReportBy: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Messort / Objekt
-                <input
-                  value={report.projectInfo.locationObject}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      projectInfo: {
-                        ...previous.projectInfo,
-                        locationObject: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Kunde (E-Mail Versand)
-                <select
-                  value={report.clientId}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      clientId: event.target.value
-                    }))
-                  }
-                >
-                  <option value="">Bitte auswählen</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.email} · {client.location}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </EditorSection>
-
-          {customTemplateVersion && (
-            <EditorSection
-              title="Campos PDF"
-              description="Felder aus der veröffentlichten Vorlage"
-              collapsed={Boolean(collapsedSections.pdf)}
-              onToggle={() => toggleSection("pdf")}
+      <section className="report-flow-layout">
+        <div className="report-flow-main">
+          {activeStep === "recipient" && (
+            <SectionCard
+              title={t("Empresa destinataria", "Zielunternehmen")}
+              eyebrow={t("Paso 1", "Schritt 1")}
+              description={t("Elige la marca que debe aparecer en la parte superior del PDF.", "Wähle die Marke, die oben im PDF erscheinen soll.")}
             >
-              <div className="grid two">
-                {customDynamicFields
-                  .filter((field) => field.type === "text" || field.type === "dropdown")
-                  .map((field) => (
-                    <label key={field.id}>
-                      {field.label}
-                      {field.type === "dropdown" ? (
-                        <select
-                          value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
-                          disabled={readOnly}
-                          onChange={(event) =>
-                            updateReport((previous) => ({
-                              ...previous,
-                              templateFields: {
-                                ...previous.templateFields,
-                                [field.id]: event.target.value
-                              }
-                            }))
-                          }
-                        >
-                          <option value="">Bitte auswählen</option>
-                          {field.options.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
-                          disabled={readOnly}
-                          onChange={(event) =>
-                            updateReport((previous) => ({
-                              ...previous,
-                              templateFields: {
-                                ...previous.templateFields,
-                                [field.id]: event.target.value
-                              }
-                            }))
-                          }
-                        />
-                      )}
-                      {field.helpText && <small>{field.helpText}</small>}
-                    </label>
-                  ))}
+              <div className="company-grid">
+                {COMPANY_OPTIONS.map((company) => (
+                  <button
+                    key={company.id}
+                    type="button"
+                    className={report.companyId === company.id ? "company-card active" : "company-card"}
+                    disabled={!canMutateDraft}
+                    onClick={() =>
+                      updateReport((previous) => ({
+                        ...previous,
+                        companyId: company.id
+                      }))
+                    }
+                  >
+                    <strong>{company.name}</strong>
+                    <span>{company.logoStoragePath}</span>
+                  </button>
+                ))}
               </div>
+            </SectionCard>
+          )}
 
-              {customDynamicFields
-                .filter((field) => field.type === "textarea")
-                .map((field) => (
-                  <label key={field.id}>
-                    {field.label}
+          {activeStep === "client" && (
+            <SectionCard
+              title={t("Cliente y ubicación", "Kunde und Einsatzort")}
+              eyebrow={t("Paso 2", "Schritt 2")}
+              description={t("Vincula el informe al cliente correcto y completa la dirección de trabajo.", "Verknüpfe den Bericht mit dem richtigen Kunden und Einsatzort.")}
+            >
+              <div className="form-panel-grid">
+                <div className="form-panel">
+                  <span className="form-panel__eyebrow">{t("Ficha del cliente", "Kundenprofil")}</span>
+                  <div className="grid two">
+                    <label>
+                      {t("Cliente", "Kunde")}
+                      <select
+                        value={report.clientId}
+                        disabled={!canMutateDraft}
+                        onChange={(event) => {
+                          const nextClientId = event.target.value;
+                          const selected = clients.find((client) => client.id === nextClientId);
+
+                          updateReport((previous) => ({
+                            ...previous,
+                            clientId: nextClientId,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              locationObject: selected ? selected.location : previous.projectInfo.locationObject
+                            },
+                            contacts: selected
+                              ? {
+                                  ...previous.contacts,
+                                  name1: selected.principalContact,
+                                  email: selected.email,
+                                  phone1: selected.phone,
+                                  street1: selected.location
+                                }
+                              : previous.contacts
+                          }));
+                        }}
+                      >
+                        <option value="">{t("Seleccionar cliente", "Kunden auswählen")}</option>
+                        {clients.map((client) => (
+                          <option key={client.id} value={client.id}>
+                            {getClientLabel(client)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {t("Nombre", "Vorname")}
+                      <input className="field-readonly" value={selectedClient?.name ?? ""} readOnly />
+                    </label>
+                    <label>
+                      {t("Apellido", "Nachname")}
+                      <input className="field-readonly" value={selectedClient?.surname ?? ""} readOnly />
+                    </label>
+                    <label>
+                      {t("Ubicación base", "Basisstandort")}
+                      <input className="field-readonly" value={selectedClient?.location ?? ""} readOnly />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="form-panel">
+                  <span className="form-panel__eyebrow">{t("Datos para el informe", "Daten für den Bericht")}</span>
+                  <div className="grid two">
+                    <label>
+                      {t("Ubicación / objeto", "Ort / Objekt")}
+                      <input
+                        className={selectedClient && report.projectInfo.locationObject === selectedClient.location ? "field-autofilled" : undefined}
+                        value={report.projectInfo.locationObject}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              locationObject: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Contacto principal", "Hauptkontakt")}
+                      <input
+                        className={selectedClient && report.contacts.name1 === selectedClient.principalContact ? "field-autofilled" : undefined}
+                        value={report.contacts.name1}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              name1: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Correo de envío", "Versand-E-Mail")}
+                      <input
+                        className={selectedClient && report.contacts.email === selectedClient.email ? "field-autofilled" : undefined}
+                        value={report.contacts.email}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              email: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Teléfono", "Telefon")}
+                      <input
+                        className={selectedClient && report.contacts.phone1 === selectedClient.phone ? "field-autofilled" : undefined}
+                        value={report.contacts.phone1}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              phone1: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="form-panel__full">
+                      {t("Dirección", "Adresse")}
+                      <input
+                        className={selectedClient && report.contacts.street1 === selectedClient.location ? "field-autofilled" : undefined}
+                        value={report.contacts.street1}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              street1: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+              {selectedClient && (
+                <div className="validation-list validation-list--success">
+                  <strong>{t("Datos del cliente autocompletados", "Kundendaten automatisch ausgefüllt")}</strong>
+                  <small>{getClientLabel(selectedClient)}</small>
+                  <small>{t("Contacto principal", "Hauptkontakt")}: {selectedClient.principalContact}</small>
+                </div>
+              )}
+            </SectionCard>
+          )}
+
+          {activeStep === "technical" && (
+            <SectionCard
+              title={t("Datos técnicos", "Technische Daten")}
+              eyebrow={t("Paso 3", "Schritt 3")}
+              description={t("Completa el núcleo del informe antes de documentar las fotos.", "Fülle den Kernbericht aus, bevor du die Fotos dokumentierst.")}
+            >
+              <div className="form-panel-grid">
+                <div className="form-panel">
+                  <span className="form-panel__eyebrow">{t("Base de la visita", "Einsatzbasis")}</span>
+                  <div className="grid two">
+                    <label>
+                      {t("Número de proyecto", "Projektnummer")}
+                      <input
+                        value={report.projectInfo.projectNumber}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              projectNumber: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Fecha y hora", "Termin")}
+                      <input
+                        type="datetime-local"
+                        value={report.projectInfo.appointmentDate}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              appointmentDate: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Técnico", "Techniker")}
+                      <input
+                        value={report.projectInfo.technicianName}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              technicianName: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Primer aviso por", "Erstmeldung durch")}
+                      <input
+                        value={report.projectInfo.firstReportBy}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              firstReportBy: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="form-panel">
+                  <span className="form-panel__eyebrow">{t("Resumen de intervención", "Einsatzresümee")}</span>
+                  <label>
+                    {t("Resultado / resumen", "Ergebnis / Zusammenfassung")}
                     <textarea
-                      value={typeof report.templateFields[field.id] === "string" ? String(report.templateFields[field.id]) : ""}
-                      disabled={readOnly}
+                      value={report.findings.summary}
+                      disabled={!canMutateDraft}
                       onChange={(event) =>
                         updateReport((previous) => ({
                           ...previous,
-                          templateFields: {
-                            ...previous.templateFields,
-                            [field.id]: event.target.value
+                          findings: {
+                            ...previous.findings,
+                            summary: event.target.value
                           }
                         }))
                       }
                     />
-                    {field.helpText && <small>{field.helpText}</small>}
                   </label>
-                ))}
+                </div>
+              </div>
 
-              {customDynamicFields.some((field) => field.type === "checkbox") && (
-                <div className="checkbox-grid">
-                  {customDynamicFields
-                    .filter((field) => field.type === "checkbox")
-                    .map((field) => (
-                      <label key={field.id} className="checkbox">
+              <div className="grid two">
+                <div className="checklist-panel">
+                  <strong>{t("Daño observado", "Schadensbild")}</strong>
+                  <div className="checkbox-grid">
+                    {DAMAGE_OPTIONS.map((option) => (
+                      <label key={option.key} className="checkbox">
                         <input
                           type="checkbox"
-                          checked={Boolean(report.templateFields[field.id])}
-                          disabled={readOnly}
+                          checked={report.damageChecklist.flags[option.key]}
+                          disabled={!canMutateDraft}
                           onChange={(event) =>
                             updateReport((previous) => ({
                               ...previous,
-                              templateFields: {
-                                ...previous.templateFields,
-                                [field.id]: event.target.checked
+                              damageChecklist: {
+                                ...previous.damageChecklist,
+                                flags: {
+                                  ...previous.damageChecklist.flags,
+                                  [option.key]: event.target.checked
+                                }
                               }
                             }))
                           }
                         />
-                        {field.label}
+                        {getLocalizedOptionLabel(language, option)}
                       </label>
                     ))}
+                  </div>
                 </div>
-              )}
 
-              {customAssetFields.length > 0 && (
-                <div className="template-asset-grid">
-                  {customAssetFields.map((field) => (
-                    <div key={field.id} className="photo-slot">
-                      <h3>{field.label}</h3>
-                      {field.helpText && <p>{field.helpText}</p>}
-                      {report.templateAssetUrls?.[field.id] ? (
-                        <a href={report.templateAssetUrls[field.id]} target="_blank" rel="noreferrer">
-                          Asset öffnen
-                        </a>
-                      ) : (
-                        <p>Noch kein Asset hochgeladen.</p>
-                      )}
+                <div className="checklist-panel">
+                  <strong>{t("Técnicas usadas", "Verfahren")}</strong>
+                  <div className="checkbox-grid">
+                    {TECHNIQUE_OPTIONS.map((option) => (
+                      <label key={option.value} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={report.techniques.includes(option.value)}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              techniques: event.target.checked
+                                ? [...previous.techniques, option.value]
+                                : previous.techniques.filter((item) => item !== option.value)
+                            }))
+                          }
+                        />
+                        {getLocalizedTechniqueLabel(language, option)}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="checklist-panel">
+                <strong>{t("Acciones y seguimiento", "Maßnahmen und Folgearbeiten")}</strong>
+                <div className="checkbox-grid">
+                  {ACTION_OPTIONS.map((option) => (
+                    <label key={option.key} className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={report.actions.flags[option.key]}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            actions: {
+                              ...previous.actions,
+                              flags: {
+                                ...previous.actions.flags,
+                                [option.key]: event.target.checked
+                              }
+                            }
+                          }))
+                        }
+                      />
+                      {getLocalizedOptionLabel(language, option)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </SectionCard>
+          )}
+
+          {activeStep === "photos" && (
+            <SectionCard
+              title={t("Fotos y anotaciones", "Fotos und Markierungen")}
+              eyebrow={t("Paso 4", "Schritt 4")}
+              description={t("Sube imágenes de la visita y marca las zonas relevantes directamente sobre la foto.", "Lade Bilder hoch und markiere relevante Bereiche direkt auf dem Foto.")}
+            >
+              <div className="photo-workspace">
+                {PHOTO_SLOTS.map((slot) => {
+                  const photo = report.photos.find((item) => item.slot === slot);
+                  const annotations = readAnnotations(report, slot);
+                  return (
+                    <article key={slot} className="photo-workspace__slot">
+                      <div className="photo-workspace__header">
+                        <strong>{t(`Foto ${slot}`, `Foto ${slot}`)}</strong>
+                        {photo?.downloadUrl && <StatusChip tone="info">{t("Con imagen", "Mit Bild")}</StatusChip>}
+                      </div>
                       <label>
-                        Datei hochladen
+                        {t("Subir imagen", "Bild hochladen")}
                         <input
                           type="file"
                           accept="image/*"
-                          disabled={readOnly}
-                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                            void uploadTemplateAsset(field, event.target.files?.[0])
-                          }
+                          disabled={!isOnline || saving || !canMutateDraft}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) => void handlePhotoUpload(slot, event.target.files?.[0])}
                         />
                       </label>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {customSignatureFields.length > 0 && (
-                <p>Die Signaturfelder dieser Vorlage werden aus der Techniker-Signatur unten befüllt.</p>
-              )}
-            </EditorSection>
+                      <label>
+                        {t("Zona / estancia", "Ort / Raum")}
+                        <input disabled={!canMutateDraft} value={photo?.location ?? ""} onChange={(event) => updatePhotoMeta(slot, "location", event.target.value)} />
+                      </label>
+                      <label>
+                        {t("Observación", "Dokumentation")}
+                        <textarea disabled={!canMutateDraft} value={photo?.documentation ?? ""} onChange={(event) => updatePhotoMeta(slot, "documentation", event.target.value)} />
+                      </label>
+                      {photo?.downloadUrl ? (
+                        <PhotoAnnotatorLite
+                          imageUrl={photo.downloadUrl}
+                          annotations={annotations}
+                          language={language}
+                          disabled={!isOnline || saving || !canMutateDraft}
+                          onChange={(next) => updateAnnotations(slot, next)}
+                        />
+                      ) : (
+                        <EmptyState
+                          title={t("Sin imagen aún", "Noch kein Bild")}
+                          description={t("Cuando subas una foto podrás señalar la zona exacta.", "Nach dem Upload kannst du den genauen Bereich markieren.")}
+                        />
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </SectionCard>
           )}
 
-          <EditorSection
-            title="Contactos"
-            description="Direkte Kommunikationsdaten"
-            collapsed={Boolean(collapsedSections.contacts)}
-            onToggle={() => toggleSection("contacts")}
-          >
-            <div className="grid two">
-              {(
-                [
-                  ["name1", "Name 1"],
-                  ["name2", "Name 2"],
-                  ["street1", "Straße 1"],
-                  ["street2", "Straße 2"],
-                  ["city1", "Ort 1"],
-                  ["city2", "Ort 2"],
-                  ["phone1", "Telefon 1"],
-                  ["phone2", "Telefon 2"],
-                  ["mobile1", "Mobil 1"],
-                  ["mobile2", "Mobil 2"],
-                  ["email", "E-Mail"]
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key}>
-                  {label}
+          {activeStep === "signature" && (
+            <SectionCard
+              title={t("Firma del técnico", "Techniker-Signatur")}
+              eyebrow={t("Paso 5", "Schritt 5")}
+              description={t("La firma se conserva y se inserta en el PDF final.", "Die Signatur wird gespeichert und im finalen PDF eingefügt.")}
+            >
+              <div className="grid two">
+                <label>
+                  {t("Nombre visible", "Angezeigter Name")}
                   <input
-                    value={report.contacts[key]}
-                    disabled={readOnly}
+                    value={report.signature.technicianName}
+                    disabled={!canMutateDraft}
                     onChange={(event) =>
                       updateReport((previous) => ({
                         ...previous,
-                        contacts: {
-                          ...previous.contacts,
-                          [key]: event.target.value
+                        signature: {
+                          ...previous.signature,
+                          technicianName: event.target.value
                         }
                       }))
                     }
                   />
                 </label>
-              ))}
-            </div>
-          </EditorSection>
-
-          <EditorSection
-            title="Resultado"
-            description="Diagnóstico y texto final"
-            collapsed={Boolean(collapsedSections.findings)}
-            onToggle={() => toggleSection("findings")}
-          >
-            <div className="checkbox-grid">
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={report.findings.causeFound}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      findings: { ...previous.findings, causeFound: event.target.checked }
-                    }))
-                  }
-                />
-                Ursache gefunden
-              </label>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={report.findings.causeExposed}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      findings: { ...previous.findings, causeExposed: event.target.checked }
-                    }))
-                  }
-                />
-                Ursache freigelegt
-              </label>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={report.findings.temporarySeal}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      findings: { ...previous.findings, temporarySeal: event.target.checked }
-                    }))
-                  }
-                />
-                Notabdichtung
-              </label>
-            </div>
-            <label>
-              Ergebnistext
-              <textarea
-                value={report.findings.summary}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    findings: {
-                      ...previous.findings,
-                      summary: event.target.value
-                    }
-                  }))
-                }
-              />
-            </label>
-          </EditorSection>
-
-          <EditorSection
-            title="Acciones"
-            description="Nächste Schritte und Abstimmungen"
-            collapsed={Boolean(collapsedSections.actions)}
-            onToggle={() => toggleSection("actions")}
-          >
-            <div className="grid two">
-              <label>
-                Abgesprochen mit
-                <input
-                  value={report.actions.agreedWith}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      actions: {
-                        ...previous.actions,
-                        agreedWith: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Abzustimmen mit
-                <input
-                  value={report.actions.coordinateWith}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      actions: {
-                        ...previous.actions,
-                        coordinateWith: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="checkbox-grid">
-              {ACTION_OPTIONS.map((option) => (
-                <label key={option.key} className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={report.actions.flags[option.key]}
-                    disabled={readOnly}
-                    onChange={(event) =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        actions: {
-                          ...previous.actions,
-                          flags: {
-                            ...previous.actions.flags,
-                            [option.key]: event.target.checked
-                          }
-                        }
-                      }))
-                    }
-                  />
-                  {option.label}
-                </label>
-              ))}
-            </div>
-
-            <label>
-              Demontage Details
-              <input
-                value={report.actions.demontageDetails}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    actions: {
-                      ...previous.actions,
-                      demontageDetails: event.target.value
-                    }
-                  }))
-                }
-              />
-            </label>
-
-            <label>
-              Sonstiges
-              <textarea
-                value={report.actions.notes}
-                disabled={readOnly}
-                onChange={(event) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    actions: {
-                      ...previous.actions,
-                      notes: event.target.value
-                    }
-                  }))
-                }
-              />
-            </label>
-          </EditorSection>
-
-          <EditorSection
-            title="Fotos"
-            description="Bilddokumentation und Assets"
-            collapsed={Boolean(collapsedSections.photos)}
-            onToggle={() => toggleSection("photos")}
-          >
-            <div className="photo-grid">
-              {PHOTO_SLOTS.map((slot) => {
-                const photo = report.photos.find((entry) => entry.slot === slot);
-
-                return (
-                  <div key={slot} className="photo-slot">
-                    <h3>{slot}. Bild</h3>
-                    {photo?.downloadUrl ? (
-                      <a href={photo.downloadUrl} target="_blank" rel="noreferrer">
-                        Bild öffnen
-                      </a>
-                    ) : (
-                      <p>Noch kein Bild hochgeladen.</p>
-                    )}
-
-                    <label>
-                      Datei hochladen
-                      <input
-                        type="file"
-                        accept="image/*"
-                        disabled={readOnly}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                          void handlePhotoUpload(slot, event.target.files?.[0])
-                        }
-                      />
-                    </label>
-
-                    <label>
-                      Ort der Aufnahme
-                      <input
-                        value={photo?.location ?? ""}
-                        disabled={readOnly}
-                        onChange={(event) => updatePhotoMeta(slot, "location", event.target.value)}
-                      />
-                    </label>
-
-                    <label>
-                      Dokumentation
-                      <textarea
-                        value={photo?.documentation ?? ""}
-                        disabled={readOnly}
-                        onChange={(event) => updatePhotoMeta(slot, "documentation", event.target.value)}
-                      />
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </EditorSection>
-
-          <EditorSection
-            title="Firma"
-            description="Techniker-Signatur für den finalen Bericht"
-            collapsed={Boolean(collapsedSections.signature)}
-            onToggle={() => toggleSection("signature")}
-          >
-            <label>
-              Name
-              <input
-                value={report.signature.technicianName}
-                disabled={readOnly}
-                onChange={(event) =>
+                <div className="signature-meta">
+                  <StatusChip tone={report.signature.storagePath || report.signature.dataUrl ? "success" : "warning"}>
+                    {report.signature.storagePath || report.signature.dataUrl
+                      ? t("Firma preparada", "Signatur bereit")
+                      : t("Firma pendiente", "Signatur ausstehend")}
+                  </StatusChip>
+                </div>
+              </div>
+              <SignaturePad
+                initialValue={report.signature.dataUrl || report.signature.downloadUrl}
+                disabled={!isOnline || saving || report.status === "finalized" || !canMutateDraft}
+                language={language}
+                onChange={(dataUrl) =>
                   updateReport((previous) => ({
                     ...previous,
                     signature: {
                       ...previous.signature,
-                      technicianName: event.target.value
+                      dataUrl,
+                      signedAt: new Date().toISOString()
                     }
                   }))
                 }
               />
-            </label>
+            </SectionCard>
+          )}
 
-            <SignaturePad
-              initialValue={report.signature.dataUrl || report.signature.downloadUrl}
-              disabled={readOnly}
-              onChange={(dataUrl) =>
-                updateReport((previous) => ({
-                  ...previous,
-                  signature: {
-                    ...previous.signature,
-                    dataUrl,
-                    signedAt: new Date().toISOString()
-                  }
-                }))
-              }
-            />
-          </EditorSection>
+          {activeStep === "review" && (
+            <SectionCard
+              title={t("Revisión y salida", "Prüfung und Ausgabe")}
+              eyebrow={t("Paso 6", "Schritt 6")}
+              description={t("Comprueba el estado del informe, genera la vista previa y envía el PDF al cliente.", "Prüfe den Bericht, generiere die Vorschau und sende das PDF an den Kunden.")}
+            >
+              <div className="review-grid">
+                <div className="review-grid__summary">
+                  <div className="metric-grid metric-grid--compact">
+                    <article className="metric-card">
+                      <span>{t("Empresa", "Unternehmen")}</span>
+                      <strong>{COMPANY_OPTIONS.find((company) => company.id === report.companyId)?.name ?? "-"}</strong>
+                    </article>
+                    <article className="metric-card">
+                      <span>{t("Cliente", "Kunde")}</span>
+                      <strong>{selectedClient ? getClientFullName(selectedClient) || selectedClient.location : "-"}</strong>
+                    </article>
+                    <article className="metric-card">
+                      <span>{t("Fotos", "Fotos")}</span>
+                      <strong>{report.photos.length}</strong>
+                    </article>
+                  </div>
 
-          <EditorSection
-            title="Avanzado"
-            description="Daño, asistentes, técnicas y facturación"
-            collapsed={Boolean(collapsedSections.advanced)}
-            onToggle={() => toggleSection("advanced")}
-          >
-            <div className="stack">
-              <h3>Schadensbild / Anlass</h3>
-              <div className="checkbox-grid">
-                {DAMAGE_OPTIONS.map((option) => (
-                  <label key={option.key} className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={report.damageChecklist.flags[option.key]}
-                      disabled={readOnly}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          damageChecklist: {
-                            ...previous.damageChecklist,
-                            flags: {
-                              ...previous.damageChecklist.flags,
-                              [option.key]: event.target.checked
-                            }
-                          }
-                        }))
-                      }
+                  {validationErrors.length > 0 ? (
+                    <div className="validation-list">
+                      <strong>{t("Puntos pendientes", "Offene Punkte")}</strong>
+                      {validationErrors.map((item) => (
+                        <small key={item}>{item}</small>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="validation-list validation-list--success">
+                      <strong>{t("Informe listo para finalizar", "Bericht bereit zur Finalisierung")}</strong>
+                    </div>
+                  )}
+                </div>
+
+                <div className="review-grid__preview">
+                  <div className="row">
+                    <button type="button" className="ghost" disabled={previewLoading || saving || !isOnline} onClick={() => void previewPdf()}>
+                      {previewLoading ? t("Generando preview...", "Vorschau wird erstellt...") : t("Generar preview PDF", "PDF-Vorschau erzeugen")}
+                    </button>
+                    {previewUrl && (
+                      <a className="ghost button-link" href={previewUrl} target="_blank" rel="noreferrer">
+                        {t("Abrir en pestaña", "Im Tab öffnen")}
+                      </a>
+                    )}
+                  </div>
+                  {previewUrl ? (
+                    <object className="pdf-preview-frame editor-pdf-frame" data={previewUrl} type="application/pdf">
+                      <p>{t("Tu navegador no puede mostrar el PDF.", "Der Browser kann das PDF nicht anzeigen.")}</p>
+                    </object>
+                  ) : (
+                    <EmptyState
+                      title={t("Sin preview todavía", "Noch keine Vorschau")}
+                      description={t("Guarda el informe y genera una vista previa para revisar el PDF final.", "Speichere den Bericht und erzeuge eine Vorschau für das finale PDF.")}
                     />
-                    {option.label}
-                  </label>
-                ))}
+                  )}
+                </div>
               </div>
-              <label>
-                Notizen
-                <textarea
-                  value={report.damageChecklist.notes}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      damageChecklist: {
-                        ...previous.damageChecklist,
-                        notes: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="stack">
-              <h3>Anwesende</h3>
-              <div className="checkbox-grid">
-                {ATTENDEE_OPTIONS.map((option) => (
-                  <label key={option.key} className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={report.attendees.flags[option.key]}
-                      disabled={readOnly}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          attendees: {
-                            ...previous.attendees,
-                            flags: {
-                              ...previous.attendees.flags,
-                              [option.key]: event.target.checked
-                            }
-                          }
-                        }))
-                      }
-                    />
-                    {option.label}
-                  </label>
-                ))}
-              </div>
-              <label>
-                Weitere Anwesende / Notiz
-                <textarea
-                  value={report.attendees.notes}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    updateReport((previous) => ({
-                      ...previous,
-                      attendees: {
-                        ...previous.attendees,
-                        notes: event.target.value
-                      }
-                    }))
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="stack">
-              <h3>Eingesetzte Verfahren und Technik</h3>
-              <div className="checkbox-grid">
-                {TECHNIQUE_OPTIONS.map((option) => (
-                  <label key={option} className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={report.techniques.includes(option)}
-                      disabled={readOnly}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          techniques: event.target.checked
-                            ? [...previous.techniques, option]
-                            : previous.techniques.filter((item) => item !== option)
-                        }))
-                      }
-                    />
-                    {option}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="stack">
-              <h3>Abrechnung</h3>
-              <div className="grid three">
-                <label>
-                  Von
-                  <input
-                    type="time"
-                    value={report.billing.from}
-                    disabled={readOnly}
-                    onChange={(event) =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        billing: {
-                          ...previous.billing,
-                          from: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-
-                <label>
-                  Bis
-                  <input
-                    type="time"
-                    value={report.billing.to}
-                    disabled={readOnly}
-                    onChange={(event) =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        billing: {
-                          ...previous.billing,
-                          to: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-
-                <label>
-                  Arbeitszeit (Stunden)
-                  <input
-                    value={report.billing.workingTimeHours}
-                    disabled={readOnly}
-                    onChange={(event) =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        billing: {
-                          ...previous.billing,
-                          workingTimeHours: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-            </div>
-          </EditorSection>
+            </SectionCard>
+          )}
         </div>
 
-        <aside className="editor-preview-pane">
-          <div className="surface stack editor-preview-surface">
-            <div className="module-header">
-              <div>
-                <h2>PDF Vorschau</h2>
-                <p>{previewLoading ? "Preview wird erzeugt..." : previewUrl ? "Aktuelle Arbeitsansicht des PDFs." : "Noch keine Vorschau erzeugt."}</p>
-              </div>
-              <div className="row">
-                <button type="button" className="ghost" disabled={readOnly || previewLoading} onClick={previewPdf}>
-                  Aktualisieren
-                </button>
-                {previewUrl && (
-                  <a className="ghost button-link" href={previewUrl} target="_blank" rel="noreferrer">
-                    Im neuen Tab
-                  </a>
-                )}
-              </div>
+        <aside className="report-flow-side">
+          <SectionCard
+            title={t("Estado del flujo", "Ablaufstatus")}
+            eyebrow={t("Checklist", "Checkliste")}
+            description={t("Cada paso deja claro si está listo, en curso o bloqueado por información anterior.", "Jeder Schritt zeigt klar, ob er bereit, aktiv oder durch frühere Angaben blockiert ist.")}
+          >
+            <div className="flow-status-list">
+              {STEPS.map((step) => (
+                <div key={step} className={`flow-status-item flow-status-item--${currentStepState(step)}`}>
+                  <span>{getStepText(step, language)}</span>
+                  <StatusChip tone={
+                    currentStepState(step) === "done"
+                      ? "success"
+                      : currentStepState(step) === "active"
+                        ? "info"
+                        : currentStepState(step) === "blocked"
+                          ? "danger"
+                          : "warning"
+                  }>
+                    {currentStepState(step) === "done"
+                      ? t("Listo", "Bereit")
+                      : currentStepState(step) === "active"
+                        ? t("En curso", "Aktiv")
+                        : currentStepState(step) === "blocked"
+                          ? t("Bloqueado", "Blockiert")
+                          : t("Pendiente", "Offen")}
+                  </StatusChip>
+                </div>
+              ))}
             </div>
-
-            {previewUrl ? (
-              <object className="pdf-preview-frame editor-pdf-frame" data={previewUrl} type="application/pdf">
-                <p>Der Browser konnte die PDF Vorschau nicht direkt anzeigen.</p>
-              </object>
-            ) : (
-              <div className="empty-state preview-empty-state">
-                <strong>Noch keine PDF Vorschau</strong>
-                <p>Speichere den Bericht und erzeuge eine Vorschau, um das finale Dokument hier zu prüfen.</p>
-              </div>
-            )}
-
-            {validationErrors.length > 0 && (
-              <div className="surface-muted stack">
-                <strong>Validierung</strong>
-                {validationErrors.map((item) => (
-                  <small key={item}>{item}</small>
-                ))}
-              </div>
-            )}
-          </div>
+          </SectionCard>
         </aside>
       </section>
+
+      <ActionBar
+        secondary={
+          <>
+            <button type="button" className="ghost" disabled={stepIndex(activeStep) === 0} onClick={() => goStep(-1)}>
+              {t("Anterior", "Zurück")}
+            </button>
+            <button type="button" className="ghost" disabled={!isOnline || saving || !canMutateDraft} onClick={() => void persistReport(true)}>
+              {t("Guardar ahora", "Jetzt speichern")}
+            </button>
+          </>
+        }
+        primary={
+          activeStep === "review" ? (
+            <>
+              {report.status === "finalized" ? (
+                <button
+                  type="button"
+                  disabled={!isOnline || saving || !report.clientId || !canSendEmail}
+                  onClick={() => void sendPdfByEmail()}
+                >
+                  {t("Enviar PDF", "PDF senden")}
+                </button>
+              ) : (
+                <button type="button" disabled={!isOnline || saving || !canMutateDraft} onClick={() => void finalizeReport()}>
+                  {t("Finalizar PDF", "PDF finalisieren")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="ghost"
+                disabled={!isOnline || saving || report.status !== "finalized" || !report.clientId || !canSendEmail}
+                onClick={() => void sendPdfByEmail()}
+              >
+                {t("Enviar por correo", "Per E-Mail senden")}
+              </button>
+            </>
+          ) : (
+            <button type="button" disabled={!canAdvance} onClick={() => goStep(1)}>
+              {canAdvance ? t("Siguiente paso", "Nächster Schritt") : t("Completa este paso", "Diesen Schritt abschließen")}
+            </button>
+          )
+        }
+        aside={
+          <div className="action-bar__stack">
+            <small>{lastSavedLabel}</small>
+            <small>{t("Guardado continuo activo cuando hay conexión.", "Kontinuierliches Speichern aktiv, wenn eine Verbindung besteht.")}</small>
+          </div>
+        }
+      />
     </main>
   );
 };

@@ -2,7 +2,7 @@ import type { Bucket } from "@google-cloud/storage";
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { fillReportPdfTemplate } from "../src/pdf";
-import { DEFAULT_TEMPLATES } from "../src/templates";
+import { REPORT_TEMPLATE } from "../src/templates";
 import { ReportData, TemplateConfig } from "../src/types";
 
 const ONE_PIXEL_PNG = Uint8Array.from(
@@ -30,7 +30,7 @@ const createTemplatePdf = async (): Promise<Uint8Array> => {
 };
 
 const buildTemplate = (): TemplateConfig => ({
-  ...DEFAULT_TEMPLATES.svt,
+  ...REPORT_TEMPLATE,
   fieldMap: {
     "projectInfo.projectNumber": "project_number",
     "findings.summary": "summary",

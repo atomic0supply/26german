@@ -1,7 +1,7 @@
 export type ReportStatus = "draft" | "finalized";
 export type UserRole = "technician" | "admin" | "office";
-export type BuiltinTemplateId = "svt" | "brasa" | "angerhausen" | "aqua-braun";
-export type TemplateId = BuiltinTemplateId | "custom";
+export type BuiltinTemplateId = "svt";
+export type TemplateId = "svt";
 export type TemplateFieldValue = string | boolean;
 export type TemplateFieldMap = Record<string, string | string[]>;
 export type TemplateImageFieldMap = Record<string, string | string[]>;
@@ -9,6 +9,15 @@ export type TemplateStatus = "draft" | "published";
 export type TemplateFieldType = "text" | "textarea" | "checkbox" | "dropdown" | "image" | "signature";
 export type TemplateFieldSource = "dynamic" | "image" | "signature";
 export type TemplateSchemaSource = "manual" | "ai" | "mixed";
+
+export type CompanyId =
+  | "svt"
+  | "brasa"
+  | "angerhausen"
+  | "aquaradar"
+  | "herrmann"
+  | "homekoncept"
+  | "wasat";
 
 export type DamageKey =
   | "feuchteschaden"
@@ -157,7 +166,7 @@ export interface TemplateVersion {
   id: string;
   templateId: string;
   basePdfPath: string;
-  editablePdfPath: string;
+  editablePdfPath?: string;
   fieldSchema: TemplateFieldSchema[];
   versionNumber: number;
   createdBy: string;
@@ -180,23 +189,10 @@ export interface SuggestTemplateSchemaResult {
   schemaSource: TemplateSchemaSource;
 }
 
-export interface GeminiModelOption {
-  id: string;
-  displayName: string;
-  description: string;
-}
-
-export interface AiSettingsSummary {
-  hasApiKey: boolean;
-  apiKeyHint: string;
-  model: string;
-}
-
 export interface ReportData {
   clientId: string;
   brandTemplateId: TemplateId;
-  templateRef?: string;
-  templateVersionRef?: string;
+  companyId?: CompanyId;
   templateName?: string;
   projectInfo: ProjectInfo;
   contacts: ContactDetails;
@@ -208,8 +204,6 @@ export interface ReportData {
   photos: ReportPhoto[];
   billing: Billing;
   templateFields: Record<string, TemplateFieldValue>;
-  templateAssetPaths?: Record<string, string>;
-  templateAssetUrls?: Record<string, string>;
   signature: Signature;
   status: ReportStatus;
   createdBy: string;
@@ -220,6 +214,9 @@ export interface ReportData {
 
 export interface ClientData {
   id: string;
+  name: string;
+  surname: string;
+  principalContact: string;
   email: string;
   phone: string;
   location: string;
@@ -230,37 +227,37 @@ export interface ClientData {
 
 export interface ReportListItem {
   id: string;
+  createdBy: string;
+  createdByEmail?: string;
+  createdByLabel?: string;
   projectNumber: string;
   objectLabel: string;
+  clientId?: string;
+  appointmentDate?: string;
+  visitDurationMinutes?: string;
+  visitNotificationRecipient?: string;
+  visitNotificationSentAt?: string;
+  technicianName?: string;
+  companyId?: CompanyId;
   status: ReportStatus;
   updatedAt: string;
-  template: TemplateId;
   templateName?: string;
 }
 
 export interface TemplateConfig {
-  id: BuiltinTemplateId;
+  id: TemplateId;
   name: string;
   pdfTemplatePath: string;
   fieldMap: TemplateFieldMap;
-  imageFieldMap: TemplateImageFieldMap;
+  imageFieldMap?: TemplateImageFieldMap;
   signatureField: string;
   requiredTemplateFields: string[];
-  logoPath: string;
-  footerText: string;
-  headerFields: string[];
-  pdfStyle: {
-    primaryColor: string;
-    titleColor: string;
-  };
 }
 
-export interface ReportTemplateOption {
-  id: string;
-  versionId?: string;
-  value: string;
+export interface CompanyConfig {
+  id: CompanyId;
   name: string;
-  kind: "builtin" | "custom";
+  logoStoragePath: string;
 }
 
 export interface FinalizeReportResult {

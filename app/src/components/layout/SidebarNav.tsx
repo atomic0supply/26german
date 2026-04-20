@@ -8,12 +8,13 @@ export interface SidebarNavItem {
 interface SidebarNavProps {
   items: SidebarNavItem[];
   activeItem: string;
+  ariaLabel: string;
   onSelect: (itemId: string) => void;
 }
 
-export const SidebarNav = ({ items, activeItem, onSelect }: SidebarNavProps) => {
+export const SidebarNav = ({ items, activeItem, ariaLabel, onSelect }: SidebarNavProps) => {
   return (
-    <nav className="app-nav" aria-label="Hauptnavigation">
+    <nav className="app-nav" aria-label={ariaLabel}>
       {items.map((item) => (
         <button
           key={item.id}

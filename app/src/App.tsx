@@ -6,11 +6,14 @@ import { LoginForm } from "./components/LoginForm";
 import { ReportList } from "./components/ReportList";
 import { ReportEditor } from "./components/ReportEditor";
 import { detectInitialLanguage, LANGUAGE_STORAGE_KEY, Language, translate } from "./i18n";
+import { LanguageSwitch } from "./components/LanguageSwitch";
+import { useBranding } from "./lib/useBranding";
 import { UserRole } from "./types";
 
 type AccessStatus = "checking" | "allowed" | "missing_profile" | "wrong_role" | "inactive" | "error";
 
 const App = () => {
+  const branding = useBranding();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeReportId, setActiveReportId] = useState<string | null>(null);
@@ -134,7 +137,7 @@ const App = () => {
   if (!user) {
     return (
       <main className="container auth-shell">
-        <LoginForm language={language} />
+        <LoginForm language={language} onLanguageChange={setLanguage} />
       </main>
     );
   }
@@ -171,7 +174,10 @@ const App = () => {
     return (
       <main className="container auth-shell">
         <div className="auth-card">
-          <h1>{t("Kein Datenzugriff", "Sin acceso a datos")}</h1>
+          <div className="auth-card__header">
+            <h1>{t("Kein Datenzugriff", "Sin acceso a datos")}</h1>
+            <LanguageSwitch language={language} onLanguageChange={setLanguage} />
+          </div>
           <p>{guidanceMessage}</p>
           <p>
             <code>
@@ -193,7 +199,9 @@ const App = () => {
       <ReportEditor
         reportId={activeReportId}
         uid={user.uid}
+        userRole={userRole ?? "technician"}
         isOnline={isOnline}
+        language={language}
         onBack={() => setActiveReportId(null)}
       />
     );
@@ -208,6 +216,7 @@ const App = () => {
       onOpenReport={setActiveReportId}
       language={language}
       onLanguageChange={setLanguage}
+      branding={branding}
     />
   );
 };

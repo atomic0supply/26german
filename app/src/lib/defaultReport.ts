@@ -20,6 +20,7 @@ export const createDefaultReport = (uid: string, companyId?: CompanyId): ReportD
     templateName: REPORT_TEMPLATE.name,
     projectInfo: {
       projectNumber: "",
+      auftragserteilung: "",
       appointmentDate: "",
       technicianName: "",
       firstReportBy: "",

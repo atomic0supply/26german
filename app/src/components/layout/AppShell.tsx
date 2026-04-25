@@ -1,4 +1,4 @@
-import { ReactNode, useMemo } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { User } from "firebase/auth";
 import { Language, translate } from "../../i18n";
 import { UserRole } from "../../types";
@@ -91,58 +91,160 @@ export const AppShell = ({
   onSelect,
   children
 }: AppShellProps) => {
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const t = useMemo(() => (esValue: string, deValue: string) => translate(language, deValue, esValue), [language]);
   const userLabel = user.displayName?.trim() || user.email?.trim() || "User";
   const roleLabel = userRole === "admin" ? t("Admin", "Admin") : userRole === "office" ? t("Oficina", "Büro") : t("Técnico", "Techniker");
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.body.classList.toggle("app-nav-open", isMobileNavOpen);
+
+    return () => {
+      document.body.classList.remove("app-nav-open");
+    };
+  }, [isMobileNavOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(min-width: 961px)");
+    const syncNavState = (event: MediaQueryList | MediaQueryListEvent) => {
+      if (event.matches) {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    syncNavState(mediaQuery);
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", syncNavState);
+      return () => mediaQuery.removeEventListener("change", syncNavState);
+    }
+
+    mediaQuery.addListener(syncNavState);
+    return () => mediaQuery.removeListener(syncNavState);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileNavOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMobileNavOpen]);
+
+  const handleSelect = (itemId: string) => {
+    onSelect(itemId);
+    setIsMobileNavOpen(false);
+  };
+
+  const railContent = (
+    <>
+      <div className="app-rail__brand">
+        {logoUrl && <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />}
+        <span className="app-rail__eyebrow">{t("CRM operativo", "Operatives CRM")}</span>
+        <h1>{brandTitle}</h1>
+        {brandSubtitle && <p>{brandSubtitle}</p>}
+      </div>
+
+      <nav className="app-rail__nav" aria-label={t("Navegación principal", "Hauptnavigation")}>
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={item.id === activeItem ? "app-rail__nav-item active" : "app-rail__nav-item"}
+            onClick={() => handleSelect(item.id)}
+          >
+            <span className="app-rail__glyph">
+              <NavIcon id={item.id} />
+            </span>
+            <span className="app-rail__copy">
+              <strong>{item.label}</strong>
+              {item.description && <small>{item.description}</small>}
+            </span>
+            {item.badge && <span className="app-rail__badge">{item.badge}</span>}
+          </button>
+        ))}
+      </nav>
+
+      <div className="app-rail__footer">
+        <div className="app-identity-card">
+          <strong>{userLabel}</strong>
+          <span>{roleLabel}</span>
+          <small>{isOnline ? t("Conectado", "Verbunden") : t("Sin conexión", "Offline")}</small>
+        </div>
+        <button type="button" className="ghost" onClick={() => void onLogout()}>
+          {t("Cerrar sesión", "Abmelden")}
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className="app-shell">
-      <aside className="app-rail">
-        <div className="app-rail__brand">
-          {logoUrl && <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />}
-          <span className="app-rail__eyebrow">{t("CRM operativo", "Operatives CRM")}</span>
-          <h1>{brandTitle}</h1>
-          {brandSubtitle && <p>{brandSubtitle}</p>}
-        </div>
+      <aside className="app-rail">{railContent}</aside>
 
-        <nav className="app-rail__nav" aria-label={t("Navegación principal", "Hauptnavigation")}>
-          {navItems.map((item) => (
+      <div
+        className={isMobileNavOpen ? "app-drawer app-drawer--open" : "app-drawer"}
+        aria-hidden={!isMobileNavOpen}
+      >
+        <button
+          type="button"
+          className="app-drawer__backdrop"
+          aria-label={t("Cerrar menú", "Menü schließen")}
+          onClick={() => setIsMobileNavOpen(false)}
+        />
+        <aside
+          id="app-mobile-nav"
+          className="app-drawer__panel"
+          aria-label={t("Menú lateral", "Seitenmenü")}
+        >
+          <div className="app-drawer__header">
+            <span>{t("Menú", "Menü")}</span>
             <button
-              key={item.id}
               type="button"
-              className={item.id === activeItem ? "app-rail__nav-item active" : "app-rail__nav-item"}
-              onClick={() => onSelect(item.id)}
+              className="app-drawer__close"
+              aria-label={t("Cerrar menú", "Menü schließen")}
+              onClick={() => setIsMobileNavOpen(false)}
             >
-              <span className="app-rail__glyph">
-                <NavIcon id={item.id} />
-              </span>
-              <span className="app-rail__copy">
-                <strong>{item.label}</strong>
-                {item.description && <small>{item.description}</small>}
-              </span>
-              {item.badge && <span className="app-rail__badge">{item.badge}</span>}
+              <span aria-hidden="true">×</span>
             </button>
-          ))}
-        </nav>
-
-        <div className="app-rail__footer">
-          <div className="app-identity-card">
-            <strong>{userLabel}</strong>
-            <span>{roleLabel}</span>
-            <small>{isOnline ? t("Conectado", "Verbunden") : t("Sin conexión", "Offline")}</small>
           </div>
-          <button type="button" className="ghost" onClick={() => void onLogout()}>
-            {t("Cerrar sesión", "Abmelden")}
-          </button>
-        </div>
-      </aside>
+          <div className="app-drawer__body">{railContent}</div>
+        </aside>
+      </div>
 
       <div className="app-stage">
         <header className="app-stage__topbar">
-          <div>
-            <span className="app-stage__eyebrow">{brandTitle}</span>
-            <h2>{pageTitle}</h2>
-            {pageSubtitle && <p>{pageSubtitle}</p>}
+          <div className="app-stage__heading">
+            <button
+              type="button"
+              className="app-stage__menu-button"
+              aria-expanded={isMobileNavOpen}
+              aria-controls="app-mobile-nav"
+              aria-label={t("Abrir menú", "Menü öffnen")}
+              onClick={() => setIsMobileNavOpen(true)}
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+            <div>
+              <span className="app-stage__eyebrow">{brandTitle}</span>
+              <h2>{pageTitle}</h2>
+              {pageSubtitle && <p>{pageSubtitle}</p>}
+            </div>
           </div>
 
           <div className="app-stage__meta">
@@ -180,7 +282,7 @@ export const AppShell = ({
               key={item.id}
               type="button"
               className={item.id === activeItem ? "app-bottom-nav__item active" : "app-bottom-nav__item"}
-              onClick={() => onSelect(item.id)}
+              onClick={() => handleSelect(item.id)}
             >
               <span className="app-bottom-nav__icon">
                 <NavIcon id={item.id} />

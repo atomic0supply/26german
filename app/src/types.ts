@@ -35,7 +35,6 @@ export type AttendeeKey =
   | "versicherung";
 
 export type ActionKey =
-  | "regulierer"
   | "technischeTrocknung"
   | "fussbodenheizung"
   | "reparaturInstallateur"
@@ -43,13 +42,12 @@ export type ActionKey =
   | "ersatzfliesen"
   | "rueckbau"
   | "schimmelbeseitigung"
-  | "inlinereinzugPruefen"
   | "demontage"
-  | "folgetermin"
-  | "infoAquaRadar";
+  | "folgetermin";
 
 export interface ProjectInfo {
   projectNumber: string;
+  auftragserteilung?: string;
   appointmentDate: string;
   technicianName: string;
   firstReportBy: string;
@@ -242,6 +240,11 @@ export interface ReportListItem {
   status: ReportStatus;
   updatedAt: string;
   templateName?: string;
+  finalization?: {
+    pdfUrl?: string;
+    finalizedAt?: string;
+    pdfVersion?: number;
+  };
 }
 
 export interface TemplateConfig {

@@ -8,7 +8,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { sha256 } from "./hash";
 import { renderReportPdf } from "./pdf";
-import { REPORT_TEMPLATE } from "./templates";
+import { REPORT_TEMPLATE_ALL, REPORT_TEMPLATE_PROK } from "./templates";
 import { ClientData, ReportData, UserRole } from "./types";
 import { validateReportForFinalize } from "./validation";
 
@@ -230,7 +230,11 @@ export const finalizeReport = onCall({ cors: true }, async (request) => {
     throw new HttpsError("failed-precondition", "ALREADY_FINALIZED");
   }
 
-  const validationErrors = validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields);
+  const template = report.projectInfo.auftragserteilung?.trim()
+    ? REPORT_TEMPLATE_ALL
+    : REPORT_TEMPLATE_PROK;
+
+  const validationErrors = validateReportForFinalize(report, template.requiredTemplateFields);
   if (validationErrors.length > 0) {
     throw new HttpsError("invalid-argument", "VALIDATION_FAILED", {
       errors: validationErrors
@@ -241,7 +245,7 @@ export const finalizeReport = onCall({ cors: true }, async (request) => {
 
   let pdfBytes: Uint8Array;
   try {
-    pdfBytes = await renderReportPdf(report, REPORT_TEMPLATE, storageBucket, { flatten: true });
+    pdfBytes = await renderReportPdf(report, template, storageBucket, { flatten: true });
   } catch (error) {
     throw toPdfRenderError(error);
   }
@@ -308,11 +312,15 @@ export const previewPdf = onCall({ cors: true }, async (request) => {
   const report = reportSnap.data() as ReportData;
   assertCanReadReport(uid, role, report);
 
+  const template = report.projectInfo.auftragserteilung?.trim()
+    ? REPORT_TEMPLATE_ALL
+    : REPORT_TEMPLATE_PROK;
+
   const storageBucket = requireBucket();
 
   let pdfBytes: Uint8Array;
   try {
-    pdfBytes = await renderReportPdf(report, REPORT_TEMPLATE, storageBucket, { flatten: false });
+    pdfBytes = await renderReportPdf(report, template, storageBucket, { flatten: false });
   } catch (error) {
     throw toPdfRenderError(error);
   }

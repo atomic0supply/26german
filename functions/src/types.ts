@@ -21,6 +21,7 @@ export interface ReportData {
   templateName?: string;
   projectInfo: {
     projectNumber: string;
+    auftragserteilung?: string;
     appointmentDate: string;
     technicianName: string;
     firstReportBy: string;

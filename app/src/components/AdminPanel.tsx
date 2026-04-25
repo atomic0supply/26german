@@ -1,7 +1,9 @@
 import { User } from "firebase/auth";
 import { useEffect, useState } from "react";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
-import { functions } from "../firebase";
+import { db, functions, storage } from "../firebase";
 import { Language, translate } from "../i18n";
 import { UserRole } from "../types";
 import { SettingsPanel } from "./SettingsPanel";
@@ -17,7 +19,7 @@ interface AdminPanelProps {
   userRole: UserRole;
 }
 
-type AdminTab = "users" | "smtp" | "status" | "settings";
+type AdminTab = "users" | "smtp" | "status" | "marca" | "settings";
 
 interface UserRecord {
   uid: string;
@@ -80,6 +82,12 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
 
+  // Brand state
+  const [brandName, setBrandName] = useState("");
+  const [brandLogoUrl, setBrandLogoUrl] = useState("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [savingBrand, setSavingBrand] = useState(false);
+
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -115,6 +123,20 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
       .then((res) => setSmtp(res.data))
       .catch(handleError)
       .finally(() => setLoadingSmtp(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // ── Load brand when tab is active ─────────────────────────────────────────
+  useEffect(() => {
+    if (tab !== "marca") return;
+    getDoc(doc(db, "config", "branding"))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        setBrandName(String(d.companyName || ""));
+        setBrandLogoUrl(String(d.logoUrl || ""));
+      })
+      .catch(handleError);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -227,6 +249,28 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
     }
   };
 
+  // ── Save brand ──────────────────────────────────────────────────────────────
+  const handleSaveBrand = async () => {
+    setSavingBrand(true);
+    setError("");
+    try {
+      let logoUrl = brandLogoUrl;
+      if (logoFile) {
+        const storageRef = ref(storage, "branding/logo");
+        await uploadBytes(storageRef, logoFile);
+        logoUrl = await getDownloadURL(storageRef);
+        setBrandLogoUrl(logoUrl);
+        setLogoFile(null);
+      }
+      await setDoc(doc(db, "config", "branding"), { companyName: brandName, logoUrl }, { merge: true });
+      showNotice(t("Marke gespeichert.", "Marca guardada."));
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
   const roleLabel = (role: UserRole) =>
     role === "admin" ? t("Admin", "Admin") : role === "office" ? t("Büro", "Oficina") : t("Techniker", "Técnico");
 
@@ -253,6 +297,13 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
           onClick={() => setTab("status")}
         >
           {t("App-Status", "Estado")}
+        </button>
+        <button
+          type="button"
+          className={tab === "marca" ? "tab-btn active" : "tab-btn"}
+          onClick={() => setTab("marca")}
+        >
+          {t("Marke", "Marca")}
         </button>
         <button
           type="button"
@@ -572,6 +623,55 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
           ) : (
             <p>{t("Keine Daten verfügbar.", "No hay datos disponibles.")}</p>
           )}
+        </SectionCard>
+      )}
+
+      {/* ── MARCA ── */}
+      {tab === "marca" && (
+        <SectionCard
+          title={t("Unternehmensmarke", "Marca de empresa")}
+          description={t(
+            "Name und Logo der App. Das Logo erscheint in der Seitenleiste und als Favicon.",
+            "Nombre y logo de la app. El logo aparece en el menú lateral y como favicon."
+          )}
+        >
+          <div className="stack">
+            <label>
+              {t("Unternehmensname", "Nombre de empresa")}
+              <input
+                value={brandName}
+                onChange={(e) => setBrandName(e.target.value)}
+                placeholder="LeakOps CRM"
+              />
+            </label>
+
+            <label>
+              {t("Logo-Datei (PNG / SVG / WebP)", "Archivo de logo (PNG / SVG / WebP)")}
+              <input
+                type="file"
+                accept="image/png,image/svg+xml,image/webp,image/jpeg"
+                onChange={(e) => setLogoFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            {(brandLogoUrl || logoFile) && (
+              <div className="brand-logo-preview">
+                <img
+                  src={logoFile ? URL.createObjectURL(logoFile) : brandLogoUrl}
+                  alt={t("Logo-Vorschau", "Vista previa del logo")}
+                />
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => void handleSaveBrand()}
+              disabled={savingBrand || !isOnline}
+            >
+              {savingBrand ? t("Speichert...", "Guardando...") : t("Speichern", "Guardar marca")}
+            </button>
+          </div>
         </SectionCard>
       )}
 

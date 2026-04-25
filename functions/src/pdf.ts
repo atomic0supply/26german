@@ -6,7 +6,9 @@ import {
   PDFField,
   PDFOptionList,
   PDFRadioGroup,
-  PDFTextField
+  PDFTextField,
+  degrees,
+  rgb
 } from "pdf-lib";
 import { CompanyId, ReportData, TemplateConfig } from "./types";
 import { COMPANIES } from "./templates";
@@ -28,6 +30,21 @@ interface PhotoSlotGeometry {
   height: number;
 }
 
+type PhotoAnnotationShape = "pin" | "circle" | "rect" | "arrow";
+
+interface PhotoAnnotation {
+  id: string;
+  x: number;
+  y: number;
+  note?: string;
+  type?: PhotoAnnotationShape;
+  width?: number;
+  height?: number;
+  endX?: number;
+  endY?: number;
+  rotation?: number;
+}
+
 const PHOTO_SLOT_GEOMETRY: Record<number, PhotoSlotGeometry> = {
   // Página 2 (índice 1) — bild1
   1: { pageIndex: 1, x: 228, y: 98,  width: 342, height: 165 },
@@ -39,9 +56,17 @@ const PHOTO_SLOT_GEOMETRY: Record<number, PhotoSlotGeometry> = {
   5: { pageIndex: 3, x: 228, y: 571, width: 342, height: 166 },
   6: { pageIndex: 3, x: 228, y: 354, width: 342, height: 164 },
   7: { pageIndex: 3, x: 228, y: 122, width: 342, height: 165 },
-  // Página 5 (índice 4) — bild8, bild9
-  8: { pageIndex: 4, x: 228, y: 572, width: 342, height: 165 },
-  9: { pageIndex: 4, x: 228, y: 353, width: 342, height: 164 }
+  // Página 5 (índice 4) — bild8, bild9, bild10
+  8:  { pageIndex: 4, x: 228, y: 572, width: 342, height: 165 },
+  9:  { pageIndex: 4, x: 228, y: 353, width: 342, height: 164 },
+  10: { pageIndex: 4, x: 228, y: 108, width: 342, height: 164 },
+  // Página 6 (índice 5) — bild11, bild12, bild13
+  11: { pageIndex: 5, x: 228, y: 572, width: 342, height: 165 },
+  12: { pageIndex: 5, x: 228, y: 353, width: 342, height: 164 },
+  13: { pageIndex: 5, x: 228, y: 108, width: 342, height: 164 },
+  // Página 7 (índice 6) — bild14, bild15
+  14: { pageIndex: 6, x: 228, y: 572, width: 342, height: 165 },
+  15: { pageIndex: 6, x: 228, y: 353, width: 342, height: 164 }
 };
 
 // Posición del logo en la esquina superior derecha de cada página (A4: 595 × 842 pt)
@@ -73,6 +98,40 @@ const getValueByPath = (source: unknown, path: string): unknown =>
     if (!cur || typeof cur !== "object") return undefined;
     return (cur as Record<string, unknown>)[seg];
   }, source);
+
+const clamp = (value: number, min = 0.02, max = 0.98) => Math.min(max, Math.max(min, value));
+
+const normalizeAnnotation = (annotation: PhotoAnnotation): PhotoAnnotation => ({
+  id: annotation.id,
+  x: clamp(Number(annotation.x ?? 0.5)),
+  y: clamp(Number(annotation.y ?? 0.5)),
+  note: typeof annotation.note === "string" ? annotation.note : "",
+  type: annotation.type ?? "pin",
+  width: Math.max(0.03, Number(annotation.width ?? 0.16)),
+  height: Math.max(0.03, Number(annotation.height ?? 0.1)),
+  endX: clamp(Number(annotation.endX ?? Number(annotation.x ?? 0.5) + 0.15)),
+  endY: clamp(Number(annotation.endY ?? Number(annotation.y ?? 0.5) + 0.1)),
+  rotation: Number(annotation.rotation ?? 0)
+});
+
+const readPhotoAnnotations = (report: ReportData, slot: number): PhotoAnnotation[] => {
+  const raw = report.templateFields?.[`photoAnnotation:${slot}`];
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PhotoAnnotation[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item && typeof item.id === "string")
+      .map(normalizeAnnotation);
+  } catch {
+    return [];
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -188,7 +247,7 @@ const applyPhotoTextFields = (
   form: ReturnType<PDFDocument["getForm"]>,
   photos: ReportData["photos"]
 ) => {
-  for (let slot = 1; slot <= 9; slot++) {
+  for (let slot = 1; slot <= 15; slot++) {
     const photo = photos.find((p) => p.slot === slot);
     const ortField   = `bild${slot}_OrtderAufnahme`;
     const docField   = `bild${slot}_Dokumentation`;
@@ -214,11 +273,151 @@ const embedImageBytes = async (pdf: PDFDocument, path: string, bytes: Uint8Array
   return pdf.embedPng(bytes);
 };
 
+const drawArrow = (
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number
+) => {
+  const color = rgb(0.07, 0.42, 0.55);
+  const fill = rgb(0.72, 0.88, 0.93);
+  page.drawLine({
+    start: { x: startX, y: startY },
+    end: { x: endX, y: endY },
+    thickness: 3,
+    color
+  });
+  page.drawEllipse({
+    x: startX,
+    y: startY,
+    xScale: 4.4,
+    yScale: 4.4,
+    color: fill,
+    opacity: 0.95,
+    borderColor: color,
+    borderWidth: 1.6
+  });
+
+  const angle = Math.atan2(endY - startY, endX - startX);
+  const size = 10;
+  const leftX = endX - size * Math.cos(angle - Math.PI / 6);
+  const leftY = endY - size * Math.sin(angle - Math.PI / 6);
+  const rightX = endX - size * Math.cos(angle + Math.PI / 6);
+  const rightY = endY - size * Math.sin(angle + Math.PI / 6);
+
+  page.drawLine({
+    start: { x: endX, y: endY },
+    end: { x: leftX, y: leftY },
+    thickness: 3,
+    color
+  });
+  page.drawLine({
+    start: { x: endX, y: endY },
+    end: { x: rightX, y: rightY },
+    thickness: 3,
+    color
+  });
+};
+
+const getPdfArrowEndpoint = (
+  annotation: PhotoAnnotation,
+  area: { x: number; y: number; width: number; height: number }
+) => {
+  const startX = area.x + annotation.x * area.width;
+  const startY = area.y + area.height - annotation.y * area.height;
+  const rotation = ((annotation.rotation ?? 35) * Math.PI) / 180;
+  const length = (annotation.width ?? 0.16) * area.width;
+
+  return {
+    startX,
+    startY,
+    endX: startX + Math.cos(rotation) * length,
+    endY: startY - Math.sin(rotation) * length
+  };
+};
+
+const drawPhotoAnnotations = async (
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  slot: number,
+  report: ReportData,
+  area: { x: number; y: number; width: number; height: number }
+) => {
+  const annotations = readPhotoAnnotations(report, slot);
+  if (annotations.length === 0) {
+    return;
+  }
+
+  const strokeColor = rgb(0.07, 0.42, 0.55);
+  const fillColor = rgb(0.72, 0.88, 0.93);
+
+  for (const annotation of annotations) {
+    const centerX = area.x + annotation.x * area.width;
+    const centerY = area.y + area.height - annotation.y * area.height;
+    const shapeWidth = (annotation.width ?? 0.16) * area.width;
+    const shapeHeight = (annotation.height ?? 0.1) * area.height;
+    const rotation = annotation.rotation ?? 0;
+
+    if (annotation.type === "circle") {
+      page.drawEllipse({
+        x: centerX,
+        y: centerY,
+        xScale: shapeWidth / 2,
+        yScale: shapeHeight / 2,
+        color: fillColor,
+        opacity: 0.2,
+        borderColor: strokeColor,
+        borderWidth: 2.6,
+        rotate: degrees(-rotation)
+      });
+    } else if (annotation.type === "rect") {
+      page.drawRectangle({
+        x: centerX - shapeWidth / 2,
+        y: centerY - shapeHeight / 2,
+        width: shapeWidth,
+        height: shapeHeight,
+        color: fillColor,
+        opacity: 0.2,
+        borderColor: strokeColor,
+        borderWidth: 2.6,
+        rotate: degrees(-rotation)
+      });
+    } else if (annotation.type === "arrow") {
+      const { startX, startY, endX, endY } = getPdfArrowEndpoint(annotation, area);
+      drawArrow(page, startX, startY, endX, endY);
+    } else {
+      page.drawEllipse({
+        x: centerX,
+        y: centerY,
+        xScale: 7,
+        yScale: 7,
+        color: fillColor,
+        opacity: 0.32,
+        borderColor: strokeColor,
+        borderWidth: 2.2
+      });
+      page.drawLine({
+        start: { x: centerX - 7, y: centerY },
+        end: { x: centerX + 7, y: centerY },
+        thickness: 1.4,
+        color: strokeColor
+      });
+      page.drawLine({
+        start: { x: centerX, y: centerY - 7 },
+        end: { x: centerX, y: centerY + 7 },
+        thickness: 1.4,
+        color: strokeColor
+      });
+    }
+  }
+};
+
 // Dibuja foto en el slot correspondiente (a la derecha de los campos de texto)
 const drawPhotoImages = async (
   pdf: PDFDocument,
   photos: ReportData["photos"],
-  bucket: Bucket
+  bucket: Bucket,
+  report: ReportData
 ) => {
   const pages = pdf.getPages();
 
@@ -249,6 +448,12 @@ const drawPhotoImages = async (
       const drawY = geo.y + (geo.height - drawH) / 2;
 
       page.drawImage(image, { x: drawX, y: drawY, width: drawW, height: drawH });
+      await drawPhotoAnnotations(page, photo.slot, report, {
+        x: drawX,
+        y: drawY,
+        width: drawW,
+        height: drawH
+      });
     } catch {
       // imagen corrupta o formato no soportado — continuar con las demás
     }
@@ -355,15 +560,12 @@ export const renderReportPdf = async (
   applyPhotoTextFields(form, report.photos ?? []);
 
   // 5. Imágenes de fotos (dibujadas sobre las páginas)
-  await drawPhotoImages(pdf, report.photos ?? [], bucket);
+  await drawPhotoImages(pdf, report.photos ?? [], bucket, report);
 
   // 6. Logo de empresa (esquina superior derecha de todas las páginas)
   await drawCompanyLogo(pdf, report.companyId, bucket);
 
-  // 7. Firma (dibujada en posición fija, página 1)
-  await drawSignature(pdf, report.signature, bucket);
-
-  // 8. Aplanar si es versión final
+  // 7. Aplanar si es versión final
   if (options.flatten) {
     form.flatten();
   }
@@ -385,7 +587,7 @@ export const fillReportPdfTemplate = async (
   applyFieldMap(form, report, template);
   applyTechniques(form, report.techniques ?? []);
   applyPhotoTextFields(form, report.photos ?? []);
-  await drawPhotoImages(pdf, report.photos ?? [], bucket);
+  await drawPhotoImages(pdf, report.photos ?? [], bucket, report);
   await drawCompanyLogo(pdf, report.companyId, bucket);
   await drawSignature(pdf, report.signature, bucket);
 

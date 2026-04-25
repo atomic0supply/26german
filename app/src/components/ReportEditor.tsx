@@ -29,7 +29,6 @@ import { normalizeReportData } from "../lib/firestore";
 import { validateReportForFinalize } from "../lib/validation";
 import { ClientData, CompanyId, FinalizeReportResult, ReportData, ReportPhoto } from "../types";
 import { PhotoAnnotation, PhotoAnnotatorLite } from "./PhotoAnnotatorLite";
-import { SignaturePad } from "./SignaturePad";
 import { ActionBar } from "./ui/ActionBar";
 import { EmptyState } from "./ui/EmptyState";
 import { ProgressStepper } from "./ui/ProgressStepper";
@@ -46,18 +45,13 @@ interface ReportEditorProps {
   onBack: () => void;
 }
 
-type StepId = "recipient" | "client" | "technical" | "photos" | "signature" | "review";
+type StepId = "recipient" | "client" | "technical" | "photos" | "review";
 
-const STEPS: StepId[] = ["recipient", "client", "technical", "photos", "signature", "review"];
+const STEPS: StepId[] = ["recipient", "client", "technical", "photos", "review"];
 
 const ANNOTATION_PREFIX = "photoAnnotation:";
 
 const stepIndex = (step: StepId) => STEPS.indexOf(step);
-
-const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
-  const response = await fetch(dataUrl);
-  return response.blob();
-};
 
 // Firestore rejects `undefined` values; strip them recursively before any updateDoc call.
 const stripUndefined = <T,>(value: T): T => {
@@ -115,8 +109,6 @@ const getStepText = (step: StepId, language: Language) => {
       return t("Técnica", "Technik");
     case "photos":
       return t("Fotos", "Fotos");
-    case "signature":
-      return t("Firma", "Signatur");
     case "review":
       return t("Revisión", "Prüfung");
     default:
@@ -140,6 +132,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
+  const [activePhotoSlot, setActivePhotoSlot] = useState<number>(1);
   const previewBlobUrlRef = useRef("");
   const initializedRef = useRef(false);
   const lastPersistedFingerprintRef = useRef("");
@@ -162,6 +155,15 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         lastPersistedFingerprintRef.current = reportFingerprint(next);
         initializedRef.current = true;
         setLoading(false);
+
+        // Para informes finalizados: cargar automáticamente el PDF generado
+        if (next.status === "finalized" && next.finalization?.pdfUrl) {
+          if (previewBlobUrlRef.current) {
+            URL.revokeObjectURL(previewBlobUrlRef.current);
+            previewBlobUrlRef.current = "";
+          }
+          setPreviewUrl(next.finalization.pdfUrl);
+        }
       },
       (snapshotError) => {
         setError(snapshotError.message);
@@ -236,28 +238,10 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
     setError("");
 
     try {
-      let next = report;
+      const next = report;
 
-      if (next.signature.dataUrl && next.signature.dataUrl.startsWith("data:image")) {
-        const blob = await dataUrlToBlob(next.signature.dataUrl);
-        const storagePath = `report-signatures/${reportId}/technician.png`;
-        const signatureRef = ref(storage, storagePath);
-        await uploadBytes(signatureRef, blob, { contentType: "image/png" });
-        const downloadUrl = await getDownloadURL(signatureRef);
-        next = {
-          ...next,
-          signature: {
-            ...next.signature,
-            storagePath,
-            downloadUrl,
-            signedAt: next.signature.signedAt || new Date().toISOString()
-          }
-        };
-      }
-
-      const { dataUrl: _drop, ...signatureRest } = next.signature;
       await updateDoc(reportRef, {
-        ...stripUndefined({ ...next, signature: signatureRest }),
+        ...stripUndefined(next),
         updatedAt: serverTimestamp()
       });
 
@@ -531,8 +515,6 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         return Boolean(report.projectInfo.projectNumber.trim() && report.projectInfo.technicianName.trim() && report.findings.summary.trim());
       case "photos":
         return report.photos.length > 0;
-      case "signature":
-        return Boolean(report.signature.storagePath || report.signature.dataUrl);
       case "review":
         return validationErrors.length === 0;
       default:
@@ -872,7 +854,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                   <span className="form-panel__eyebrow">{t("Base de la visita", "Einsatzbasis")}</span>
                   <div className="grid two">
                     <label>
-                      {t("Número de proyecto", "Projektnummer")}
+                      {t("Número de proyecto *", "Projektnummer *")}
                       <input
                         value={report.projectInfo.projectNumber}
                         disabled={!canMutateDraft}
@@ -882,6 +864,22 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                             projectInfo: {
                               ...previous.projectInfo,
                               projectNumber: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Auftragserteilung", "Auftragserteilung")}
+                      <input
+                        value={report.projectInfo.auftragserteilung ?? ""}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            projectInfo: {
+                              ...previous.projectInfo,
+                              auftragserteilung: event.target.value
                             }
                           }))
                         }
@@ -1044,108 +1042,95 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
             </SectionCard>
           )}
 
-          {activeStep === "photos" && (
-            <SectionCard
-              title={t("Fotos y anotaciones", "Fotos und Markierungen")}
-              eyebrow={t("Paso 4", "Schritt 4")}
-              description={t("Sube imágenes de la visita y marca las zonas relevantes directamente sobre la foto.", "Lade Bilder hoch und markiere relevante Bereiche direkt auf dem Foto.")}
-            >
-              <div className="photo-workspace">
-                {PHOTO_SLOTS.map((slot) => {
-                  const photo = report.photos.find((item) => item.slot === slot);
-                  const annotations = readAnnotations(report, slot);
-                  return (
-                    <article key={slot} className="photo-workspace__slot">
-                      <div className="photo-workspace__header">
-                        <strong>{t(`Foto ${slot}`, `Foto ${slot}`)}</strong>
-                        {photo?.downloadUrl && <StatusChip tone="info">{t("Con imagen", "Mit Bild")}</StatusChip>}
-                      </div>
-                      <label>
-                        {t("Subir imagen", "Bild hochladen")}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={!isOnline || saving || !canMutateDraft}
-                          onChange={(event: ChangeEvent<HTMLInputElement>) => void handlePhotoUpload(slot, event.target.files?.[0])}
-                        />
-                      </label>
-                      <label>
-                        {t("Zona / estancia", "Ort / Raum")}
-                        <input disabled={!canMutateDraft} value={photo?.location ?? ""} onChange={(event) => updatePhotoMeta(slot, "location", event.target.value)} />
-                      </label>
-                      <label>
-                        {t("Observación", "Dokumentation")}
-                        <textarea disabled={!canMutateDraft} value={photo?.documentation ?? ""} onChange={(event) => updatePhotoMeta(slot, "documentation", event.target.value)} />
-                      </label>
-                      {photo?.downloadUrl ? (
-                        <PhotoAnnotatorLite
-                          imageUrl={photo.downloadUrl}
-                          annotations={annotations}
-                          language={language}
-                          disabled={!isOnline || saving || !canMutateDraft}
-                          onChange={(next) => updateAnnotations(slot, next)}
-                        />
-                      ) : (
-                        <EmptyState
-                          title={t("Sin imagen aún", "Noch kein Bild")}
-                          description={t("Cuando subas una foto podrás señalar la zona exacta.", "Nach dem Upload kannst du den genauen Bereich markieren.")}
-                        />
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
-            </SectionCard>
-          )}
-
-          {activeStep === "signature" && (
-            <SectionCard
-              title={t("Firma del técnico", "Techniker-Signatur")}
-              eyebrow={t("Paso 5", "Schritt 5")}
-              description={t("La firma se conserva y se inserta en el PDF final.", "Die Signatur wird gespeichert und im finalen PDF eingefügt.")}
-            >
-              <div className="grid two">
-                <label>
-                  {t("Nombre visible", "Angezeigter Name")}
-                  <input
-                    value={report.signature.technicianName}
-                    disabled={!canMutateDraft}
-                    onChange={(event) =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        signature: {
-                          ...previous.signature,
-                          technicianName: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-                <div className="signature-meta">
-                  <StatusChip tone={report.signature.storagePath || report.signature.dataUrl ? "success" : "warning"}>
-                    {report.signature.storagePath || report.signature.dataUrl
-                      ? t("Firma preparada", "Signatur bereit")
-                      : t("Firma pendiente", "Signatur ausstehend")}
-                  </StatusChip>
+          {activeStep === "photos" && (() => {
+            const activePhoto = report.photos.find((item) => item.slot === activePhotoSlot);
+            const activeAnnotations = readAnnotations(report, activePhotoSlot);
+            return (
+              <SectionCard
+                title={t("Fotos y anotaciones", "Fotos und Markierungen")}
+                eyebrow={t("Paso 4", "Schritt 4")}
+                description={t("Selecciona un slot para subir la imagen y añadir observaciones.", "Wähle einen Slot, um ein Bild hochzuladen und Anmerkungen hinzuzufügen.")}
+              >
+                <div className="photo-grid">
+                  {PHOTO_SLOTS.map((slot) => {
+                    const photo = report.photos.find((item) => item.slot === slot);
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        className={[
+                          "photo-tile",
+                          activePhotoSlot === slot ? "photo-tile--active" : "",
+                          photo?.downloadUrl ? "photo-tile--filled" : ""
+                        ].filter(Boolean).join(" ")}
+                        onClick={() => setActivePhotoSlot(slot)}
+                        title={`Foto ${slot}`}
+                      >
+                        {photo?.downloadUrl ? (
+                          <img src={photo.downloadUrl} alt="" className="photo-tile__thumb" />
+                        ) : (
+                          <div className="photo-tile__empty">
+                            <span className="photo-tile__num">{slot}</span>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-              </div>
-              <SignaturePad
-                initialValue={report.signature.dataUrl || report.signature.downloadUrl}
-                disabled={!isOnline || saving || report.status === "finalized" || !canMutateDraft}
-                language={language}
-                onChange={(dataUrl) =>
-                  updateReport((previous) => ({
-                    ...previous,
-                    signature: {
-                      ...previous.signature,
-                      dataUrl,
-                      signedAt: new Date().toISOString()
-                    }
-                  }))
-                }
-              />
-            </SectionCard>
-          )}
+
+                <div className="photo-detail">
+                  <div className="photo-detail__header">
+                    <strong>{t(`Foto ${activePhotoSlot}`, `Foto ${activePhotoSlot}`)}</strong>
+                    {activePhoto?.downloadUrl && (
+                      <StatusChip tone="info">{t("Con imagen", "Mit Bild")}</StatusChip>
+                    )}
+                  </div>
+                  <label>
+                    {t("Subir imagen", "Bild hochladen")}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={!isOnline || saving || !canMutateDraft}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => void handlePhotoUpload(activePhotoSlot, event.target.files?.[0])}
+                    />
+                  </label>
+                  <div className="grid two">
+                    <label>
+                      {t("Zona / estancia", "Ort / Raum")}
+                      <input
+                        disabled={!canMutateDraft}
+                        value={activePhoto?.location ?? ""}
+                        onChange={(event) => updatePhotoMeta(activePhotoSlot, "location", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      {t("Observación", "Dokumentation")}
+                      <input
+                        disabled={!canMutateDraft}
+                        value={activePhoto?.documentation ?? ""}
+                        onChange={(event) => updatePhotoMeta(activePhotoSlot, "documentation", event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {activePhoto?.downloadUrl ? (
+                    <PhotoAnnotatorLite
+                      imageUrl={activePhoto.downloadUrl}
+                      annotations={activeAnnotations}
+                      language={language}
+                      disabled={!isOnline || saving || !canMutateDraft}
+                      onChange={(next) => updateAnnotations(activePhotoSlot, next)}
+                    />
+                  ) : (
+                    <EmptyState
+                      title={t("Sin imagen aún", "Noch kein Bild")}
+                      description={t("Sube una foto para marcar zonas relevantes.", "Lade ein Bild hoch, um relevante Bereiche zu markieren.")}
+                    />
+                  )}
+                </div>
+              </SectionCard>
+            );
+          })()}
+
 
           {activeStep === "review" && (
             <SectionCard
@@ -1196,7 +1181,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                     )}
                   </div>
                   {previewUrl ? (
-                    <object className="pdf-preview-frame editor-pdf-frame" data={previewUrl} type="application/pdf">
+                    <object key={previewUrl} className="pdf-preview-frame editor-pdf-frame" data={previewUrl} type="application/pdf">
                       <p>{t("Tu navegador no puede mostrar el PDF.", "Der Browser kann das PDF nicht anzeigen.")}</p>
                     </object>
                   ) : (

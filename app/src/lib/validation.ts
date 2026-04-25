@@ -48,10 +48,6 @@ export const validateReportForFinalize = (
     errors.push(buildRequiredMessage(translate(language, "Ergebnis der Überprüfung", "Resultado de la revisión"), language));
   }
 
-  if (!report.signature.storagePath) {
-    errors.push(buildRequiredMessage(translate(language, "Techniker-Signatur", "Firma del técnico"), language));
-  }
-
   requiredTemplateFields.forEach((fieldPath) => {
     const value = getValueByPath(report, fieldPath);
     const label = getRequiredFieldLabel(fieldPath, language);

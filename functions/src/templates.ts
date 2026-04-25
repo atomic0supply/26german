@@ -6,13 +6,7 @@ import { CompanyConfig, CompanyId, TemplateConfig, TemplateFieldMap } from "./ty
 // ---------------------------------------------------------------------------
 const FIELD_MAP: TemplateFieldMap = {
   // Cabecera repetida en todas las páginas
-  "projectInfo.projectNumber": [
-    "Projektnummer",
-    "Projektnummer1",
-    "Projektnummer2",
-    "Projektnummer4",
-    "Projektnummer5"
-  ],
+  "projectInfo.projectNumber": "Projektnummer",
   "projectInfo.appointmentDate": "Messtermin",
   "projectInfo.technicianName":  "Messtechniker",
   "projectInfo.locationObject":  "Messort  / Objekt: ",
@@ -54,7 +48,6 @@ const FIELD_MAP: TemplateFieldMap = {
   "findings.temporarySeal": "Notabdichtung",
 
   // Checkboxes de acciones (página 1) — nombres exactos del PDF
-  "actions.flags.regulierer":           "Abzustimmen_mit",
   "actions.flags.technischeTrocknung":  "Techntrocknung",
   "actions.flags.fussbodenheizung":     "Fubodenheizung",
   "actions.flags.reparaturInstallateur":"ReparaturdurchInstallateur",
@@ -62,36 +55,49 @@ const FIELD_MAP: TemplateFieldMap = {
   "actions.flags.ersatzfliesen":        "Ersatzfliesenvorhanden  ",
   "actions.flags.rueckbau":             "Rückbauerforderlich",
   "actions.flags.schimmelbeseitigung":  "Schimmelbeseitigungerforderlich",
-  "actions.flags.inlinereinzugPruefen": "Inlinereinzugstuprüfen",
   "actions.flags.demontage":            "Demontageerforderlich",
   "actions.flags.folgetermin":          "Folgeterminerforderlich  ",
-  "actions.flags.infoAquaRadar":        "InfoanAqua-Radar  ",
 
   // Áreas de texto (página 2)
   "findings.summary":       "Einsatzbericht",
   "actions.agreedWith":     "Schadengefunden ",
   "damageChecklist.notes":  "Schadengefunden_text",
 
-  // Tiempo (página 6)
-  "billing.from": "Zeiterfassung_von",
-  "billing.to":   "Zeiterfassung_bis"
 };
 
 // ---------------------------------------------------------------------------
-// Plantilla única AcroForm
+// Plantillas AcroForm (selección dinámica según Auftragserteilung)
 // ---------------------------------------------------------------------------
-export const REPORT_TEMPLATE: TemplateConfig = {
+const FIELD_MAP_ALL: TemplateFieldMap = {
+  ...FIELD_MAP,
+  "projectInfo.auftragserteilung": "Auftragserteilung"
+};
+
+export const REPORT_TEMPLATE_PROK: TemplateConfig = {
   id: "svt",
   name: "Plantilla AcroForm",
-  pdfTemplatePath: "template/template.pdf",
+  pdfTemplatePath: "template/template-prok15.pdf",
   fieldMap: FIELD_MAP,
-  signatureField: "",           // sin campo de firma AcroForm; se dibuja en posición fija
+  signatureField: "",
   requiredTemplateFields: [
     "projectInfo.projectNumber",
-    "projectInfo.technicianName",
-    "templateFields.claimNumber"
+    "projectInfo.technicianName"
   ]
 };
+
+export const REPORT_TEMPLATE_ALL: TemplateConfig = {
+  id: "svt",
+  name: "Plantilla AcroForm (Auftragserteilung)",
+  pdfTemplatePath: "template/template-all15.pdf",
+  fieldMap: FIELD_MAP_ALL,
+  signatureField: "",
+  requiredTemplateFields: [
+    "projectInfo.projectNumber",
+    "projectInfo.technicianName"
+  ]
+};
+
+export const REPORT_TEMPLATE = REPORT_TEMPLATE_PROK;
 
 // ---------------------------------------------------------------------------
 // Empresas y logos
@@ -124,7 +130,7 @@ export const COMPANIES: Record<CompanyId, CompanyConfig> = {
   },
   homekoncept: {
     id: "homekoncept",
-    name: "homekoncept",
+    name: "HOMEKONZEPT",
     logoStoragePath: "logo/logo_homekoncept.png"
   },
   wasat: {

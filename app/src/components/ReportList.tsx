@@ -12,6 +12,7 @@ import {
   QuerySnapshot,
   query,
   serverTimestamp,
+  updateDoc,
   where
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -257,6 +258,15 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
           companyId: data.companyId as CompanyId | undefined,
           status: data.status === "finalized" ? "finalized" : "draft",
           templateName: String(data.templateName ?? REPORT_TEMPLATE.name),
+          finalization: data.finalization
+            ? {
+                pdfUrl: String((data.finalization as { pdfUrl?: string }).pdfUrl ?? ""),
+                finalizedAt: (data.finalization as { finalizedAt?: unknown }).finalizedAt
+                  ? toIsoString((data.finalization as { finalizedAt?: unknown }).finalizedAt)
+                  : "",
+                pdfVersion: Number((data.finalization as { pdfVersion?: number }).pdfVersion ?? 0) || undefined
+              }
+            : undefined,
           updatedAt: toIsoString(data.updatedAt)
         } satisfies ReportListItem;
       });
@@ -399,6 +409,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
     const appointmentDate = `${visitDraft.date}T${visitDraft.time}`;
     const projectNumber = `VIS-${visitDraft.date.replaceAll("-", "")}-${visitDraft.time.replace(":", "")}`;
+    const clientFullName = getClientFullName(selectedClient) || selectedClient.principalContact || selectedClient.location;
 
     setCreatingVisit(true);
     setError("");
@@ -421,7 +432,8 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         },
         contacts: {
           ...payload.contacts,
-          name1: selectedClient.principalContact,
+          name1: clientFullName,
+          name2: selectedClient.principalContact,
           street1: selectedClient.location,
           phone1: selectedClient.phone,
           email: selectedClient.email
@@ -432,7 +444,13 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         },
         templateFields: {
           ...payload.templateFields,
-          visitDurationMinutes: visitDraft.durationMinutes || "60"
+          visitDurationMinutes: visitDraft.durationMinutes || "60",
+          visitNotificationRecipient: selectedClient.email,
+          visitClientId: selectedClient.id,
+          visitClientName: clientFullName,
+          visitClientContact: selectedClient.principalContact,
+          visitClientPhone: selectedClient.phone,
+          visitClientLocation: selectedClient.location
         },
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -508,6 +526,42 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const logout = async () => {
     await signOut(auth);
+  };
+
+  const handleSlotClick = (date: string, time: string) => {
+    setVisitDraft((current) => ({ ...current, date, time }));
+    setShowVisitForm(true);
+    setSelectedAgendaDate(date);
+  };
+
+  const handleMoveVisit = async (reportId: string, newDate: string, newTime: string) => {
+    if (!isOnline) {
+      setError(t("Sin conexión: no se puede mover la visita.", "Offline: Einsatz kann nicht verschoben werden."));
+      return;
+    }
+    try {
+      await updateDoc(doc(db, "reports", reportId), {
+        "projectInfo.appointmentDate": `${newDate}T${newTime}`,
+        updatedAt: serverTimestamp()
+      });
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : t("No se pudo mover la visita.", "Einsatz konnte nicht verschoben werden."));
+    }
+  };
+
+  const handleResizeVisit = async (reportId: string, newDurationMinutes: string) => {
+    if (!isOnline) {
+      setError(t("Sin conexión: no se puede ajustar la duración.", "Offline: Einsatzdauer kann nicht angepasst werden."));
+      return;
+    }
+    try {
+      await updateDoc(doc(db, "reports", reportId), {
+        "templateFields.visitDurationMinutes": newDurationMinutes,
+        updatedAt: serverTimestamp()
+      });
+    } catch (resizeError) {
+      setError(resizeError instanceof Error ? resizeError.message : t("No se pudo ajustar la duración.", "Einsatzdauer konnte nicht angepasst werden."));
+    }
   };
 
   const visitItems = useMemo(() => buildVisitItems(reports, clients, userLabel), [reports, clients, userLabel]);
@@ -590,9 +644,9 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         {!loadingReports && !loadingClients && activeMenu === "agenda" && (
           <div className="workspace-stack">
             <SectionCard
-              title={t("Calendario semanal", "Wochenkalender")}
+              title={t("Agenda de visitas", "Einsatzplanung")}
               eyebrow={t("Planificación", "Planung")}
-              description={t("Selecciona un día para filtrar las visitas operativas.", "Wähle einen Tag, um operative Termine zu filtern.")}
+              description={t("Selecciona un día para ver o crear visitas. Pulsa una celda vacía para añadir.", "Wähle einen Tag zum Anzeigen oder Anlegen von Einsätzen. Leere Zelle antippen zum Hinzufügen.")}
               actions={
                 <button
                   type="button"
@@ -608,6 +662,10 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                 selectedDate={selectedAgendaDate}
                 language={language}
                 onSelectDate={setSelectedAgendaDate}
+                onSlotClick={handleSlotClick}
+                onVisitClick={onOpenReport}
+                onMoveVisit={(id, date, time) => void handleMoveVisit(id, date, time)}
+                onResizeVisit={(id, durationMinutes) => void handleResizeVisit(id, durationMinutes)}
               />
               {showVisitForm && (
                 <div className="visit-create-panel">
@@ -723,7 +781,16 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         )}
 
         {!loadingReports && !loadingClients && activeMenu === "clients" && (
-          <CustomerWorkspace clients={clients} reports={reports} uid={uid} isOnline={isOnline} language={language} />
+          <CustomerWorkspace
+            clients={clients}
+            reports={reports}
+            uid={uid}
+            isOnline={isOnline}
+            language={language}
+            currentUserLabel={userLabel}
+            currentUserEmail={user.email?.trim() || ""}
+            onOpenReport={onOpenReport}
+          />
         )}
 
         {!loadingReports && !loadingClients && activeMenu === "reports" && (

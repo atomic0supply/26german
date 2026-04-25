@@ -34,7 +34,6 @@ export const ATTENDEE_OPTIONS: LocalizedOption<AttendeeKey>[] = [
 ];
 
 export const ACTION_OPTIONS: LocalizedOption<ActionKey>[] = [
-  { key: "regulierer", deLabel: "Regulierereinsatz / Abzustimmen mit", esLabel: "Intervención del perito / coordinar con" },
   { key: "technischeTrocknung", deLabel: "Techn. Trocknung", esLabel: "Secado técnico" },
   { key: "fussbodenheizung", deLabel: "Fußbodenheizung", esLabel: "Suelo radiante" },
   { key: "reparaturInstallateur", deLabel: "Reparatur durch Installateur", esLabel: "Reparación por instalador" },
@@ -42,10 +41,8 @@ export const ACTION_OPTIONS: LocalizedOption<ActionKey>[] = [
   { key: "ersatzfliesen", deLabel: "Ersatzfliesen vorhanden", esLabel: "Hay azulejos de repuesto" },
   { key: "rueckbau", deLabel: "Rückbau erforderlich", esLabel: "Se requiere desmontaje" },
   { key: "schimmelbeseitigung", deLabel: "Schimmelbeseitigung erforderlich", esLabel: "Se requiere eliminación de moho" },
-  { key: "inlinereinzugPruefen", deLabel: "Inlinereinzug zu prüfen", esLabel: "Revisar inserción de liner" },
   { key: "demontage", deLabel: "Demontage erforderlich", esLabel: "Desmontaje necesario" },
-  { key: "folgetermin", deLabel: "Folgetermin erforderlich", esLabel: "Se requiere cita de seguimiento" },
-  { key: "infoAquaRadar", deLabel: "Info an Aqua-Radar", esLabel: "Informar a Aqua-Radar" }
+  { key: "folgetermin", deLabel: "Folgetermin erforderlich", esLabel: "Se requiere cita de seguimiento" }
 ];
 
 export const TECHNIQUE_OPTIONS: LocalizedTechniqueOption[] = [
@@ -63,7 +60,7 @@ export const TECHNIQUE_OPTIONS: LocalizedTechniqueOption[] = [
   { value: "Leitfähigkeit", deLabel: "Leitfähigkeit", esLabel: "Conductividad" }
 ];
 
-export const PHOTO_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+export const PHOTO_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
 
 // ---------------------------------------------------------------------------
 // Empresas
@@ -74,7 +71,7 @@ export const COMPANIES: Record<CompanyId, CompanyConfig> = {
   angerhausen:{ id: "angerhausen",name: "Angerhausen",  logoStoragePath: "logo/logo_angerhausen.png" },
   aquaradar:  { id: "aquaradar",  name: "AquaRADAR",    logoStoragePath: "logo/logo_aquaradar.jpg" },
   herrmann:   { id: "herrmann",   name: "Hermann SBR",  logoStoragePath: "logo/logo_herrmann.png" },
-  homekoncept:{ id: "homekoncept",name: "homekoncept",  logoStoragePath: "logo/logo_homekoncept.png" },
+  homekoncept:{ id: "homekoncept",name: "HOMEKONZEPT",  logoStoragePath: "logo/logo_homekoncept.png" },
   wasat:      { id: "wasat",      name: "Wasa-T",       logoStoragePath: "logo/Ilogo_wasatec.png" }
 };
 

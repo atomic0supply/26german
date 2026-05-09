@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
-import { Language, translate } from "../i18n";
+import { createTranslator, Language } from "../i18n";
 import { LanguageSwitch } from "./LanguageSwitch";
 
 interface LoginFormProps {
@@ -17,7 +17,7 @@ export const LoginForm = ({ language, onLanguageChange }: LoginFormProps) => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<Mode>("login");
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

@@ -10,7 +10,7 @@ describe("validateReportForFinalize", () => {
 
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.join(" ")).toContain("Projektnummer");
-    expect(errors.join(" ")).toContain("Techniker-Signatur");
+    expect(errors.join(" ")).toContain("Messtechniker");
   });
 
   it("returns translated validation errors in Spanish", () => {
@@ -19,7 +19,7 @@ describe("validateReportForFinalize", () => {
 
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.join(" ")).toContain("Número de proyecto");
-    expect(errors.join(" ")).toContain("Firma del técnico");
+    expect(errors.join(" ")).toContain("Técnico");
   });
 
   it("passes when all required fields exist", () => {
@@ -28,7 +28,19 @@ describe("validateReportForFinalize", () => {
     report.projectInfo.appointmentDate = "2026-03-27T12:30";
     report.projectInfo.technicianName = "Max Mustermann";
     report.findings.summary = "Leckage im Vorlauf lokalisiert.";
-    report.signature.storagePath = "report-signatures/report-1/technician.png";
+    report.templateFields.assignmentReference = "AB-1";
+    report.templateFields.insuranceName = "Versicherung A";
+    report.templateFields.claimNumber = "CL-9";
+
+    expect(validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields)).toEqual([]);
+  });
+
+  it("does not require technician signature by default", () => {
+    const report = createDefaultReport("uid-1");
+    report.projectInfo.projectNumber = "P-2026-1001";
+    report.projectInfo.appointmentDate = "2026-03-27T12:30";
+    report.projectInfo.technicianName = "Max Mustermann";
+    report.findings.summary = "Leckage im Vorlauf lokalisiert.";
     report.templateFields.assignmentReference = "AB-1";
     report.templateFields.insuranceName = "Versicherung A";
     report.templateFields.claimNumber = "CL-9";

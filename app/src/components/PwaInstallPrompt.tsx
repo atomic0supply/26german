@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Language, translate } from "../i18n";
+import { createTranslator, Language } from "../i18n";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -11,7 +11,7 @@ interface PwaInstallPromptProps {
 }
 
 export const PwaInstallPrompt = ({ language }: PwaInstallPromptProps) => {
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [dismissed, setDismissed] = useState(false);
 

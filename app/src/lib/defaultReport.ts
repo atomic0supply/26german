@@ -1,5 +1,5 @@
 import { ACTION_OPTIONS, ATTENDEE_OPTIONS, DAMAGE_OPTIONS, REPORT_TEMPLATE } from "../constants";
-import { CompanyId, ReportData } from "../types";
+import { CompanyId, ReportData, TemplateId } from "../types";
 
 const buildFlagMap = <T extends string>(keys: T[]) =>
   keys.reduce(
@@ -10,14 +10,22 @@ const buildFlagMap = <T extends string>(keys: T[]) =>
     {} as Record<T, boolean>
   );
 
-export const createDefaultReport = (uid: string, companyId?: CompanyId): ReportData => {
+interface CreateDefaultReportOptions {
+  companyId?: CompanyId;
+  templateId?: TemplateId;
+  templateName?: string;
+  templateVersionId?: string;
+}
+
+export const createDefaultReport = (uid: string, options: CreateDefaultReportOptions = {}): ReportData => {
   const now = new Date().toISOString();
 
   return {
     clientId: "",
-    brandTemplateId: REPORT_TEMPLATE.id,
-    companyId,
-    templateName: REPORT_TEMPLATE.name,
+    brandTemplateId: options.templateId ?? REPORT_TEMPLATE.id,
+    ...(options.templateVersionId !== undefined && { templateVersionId: options.templateVersionId }),
+    ...(options.companyId !== undefined && { companyId: options.companyId }),
+    templateName: options.templateName ?? REPORT_TEMPLATE.name,
     projectInfo: {
       projectNumber: "",
       auftragserteilung: "",

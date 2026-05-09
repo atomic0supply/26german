@@ -1,6 +1,6 @@
 import { User } from "firebase/auth";
 import { firebaseConnectionInfo } from "../firebase";
-import { Language, localeForLanguage, translate } from "../i18n";
+import { createTranslator, Language, localeForLanguage, translate } from "../i18n";
 import { UserRole } from "../types";
 
 interface SettingsPanelProps {
@@ -9,6 +9,8 @@ interface SettingsPanelProps {
   user: User;
   userRole: UserRole;
   isOnline: boolean;
+  devMode?: boolean;
+  onDevModeChange?: (devMode: boolean) => void;
 }
 
 const yesNo = (value: boolean, language: Language): string =>
@@ -22,8 +24,8 @@ const userRoleLabel = (userRole: UserRole, language: Language): string =>
       ? translate(language, "Büro", "Oficina")
       : translate(language, "Techniker", "Técnico");
 
-export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOnline }: SettingsPanelProps) => {
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOnline, devMode = false, onDevModeChange }: SettingsPanelProps) => {
+  const t = createTranslator(language);
   const locale = localeForLanguage(language);
 
   const providers = user.providerData
@@ -58,6 +60,17 @@ export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOn
             <option value="es">Español</option>
           </select>
         </label>
+        
+        {onDevModeChange && (
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+            <input
+              type="checkbox"
+              checked={devMode}
+              onChange={(e) => onDevModeChange(e.target.checked)}
+            />
+            {t("Entwicklermodus aktivieren", "Activar modo desarrollador (Dev Mode)")}
+          </label>
+        )}
       </article>
 
       <article className="card stack">
@@ -68,7 +81,7 @@ export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOn
             {user.email ?? notAvailable(language)}
           </p>
           <p>
-            <strong>UID: </strong>
+            <strong>{t("UID", "UID")}: </strong>
             {user.uid}
           </p>
           <p>
@@ -95,7 +108,7 @@ export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOn
       </article>
 
       <article className="card stack">
-        <h3>Firebase</h3>
+        <h3>{t("Firebase", "Firebase")}</h3>
         <div className="settings-grid">
           <p>
             <strong>{t("Verbindung", "Conexión")}: </strong>
@@ -124,3 +137,4 @@ export const SettingsPanel = ({ language, onLanguageChange, user, userRole, isOn
     </section>
   );
 };
+

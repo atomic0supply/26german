@@ -26,46 +26,56 @@ const BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET || undefined; // undefin
 // Assets a subir
 // ---------------------------------------------------------------------------
 const ASSETS = [
-  // Plantilla AcroForm
+  // Plantillas AcroForm — rutas alineadas con templates.ts
   {
-    localPath:   path.join(__dirname, "../doc/template.pdf"),
-    storagePath: "templates/acroform/template.pdf",
+    localPath:   path.join(__dirname, "../templates/template-prok15.pdf"),
+    storagePath: "template/template-prok15.pdf",
     contentType: "application/pdf"
   },
-  // Logos de empresas (origen → destino normalizado)
+  {
+    localPath:   path.join(__dirname, "../templates/template-all15.pdf"),
+    storagePath: "template/template-all15.pdf",
+    contentType: "application/pdf"
+  },
+  {
+    localPath:   path.join(__dirname, "../templates/template-LECKORTUNG.pdf"),
+    storagePath: "template/template-LECKORTUNG.pdf",
+    contentType: "application/pdf"
+  },
+  // Logos de empresas — rutas alineadas con COMPANIES en templates.ts
   {
     localPath:   path.join(__dirname, "../companies/SVT/logo_svt.png"),
-    storagePath: "companies/svt/logo.png",
+    storagePath: "logo/logo_svt.png",
     contentType: "image/png"
   },
   {
     localPath:   path.join(__dirname, "../companies/brasa/brasa_logo.jpg"),
-    storagePath: "companies/brasa/logo.jpg",
+    storagePath: "logo/brasa_logo.jpg",
     contentType: "image/jpeg"
   },
   {
     localPath:   path.join(__dirname, "../companies/Angerhausen/logo_angerhausen.png"),
-    storagePath: "companies/angerhausen/logo.png",
+    storagePath: "logo/logo_angerhausen.png",
     contentType: "image/png"
   },
   {
     localPath:   path.join(__dirname, "../companies/AquaRADAR/logo_aquaradar.jpg"),
-    storagePath: "companies/aquaradar/logo.jpg",
+    storagePath: "logo/logo_aquaradar.jpg",
     contentType: "image/jpeg"
   },
   {
     localPath:   path.join(__dirname, "../companies/Hermann SBR/logo_herrmann.png"),
-    storagePath: "companies/herrmann/logo.png",
+    storagePath: "logo/logo_herrmann.png",
     contentType: "image/png"
   },
   {
     localPath:   path.join(__dirname, "../companies/homekoncept/logo_homekoncept.png"),
-    storagePath: "companies/homekoncept/logo.png",
+    storagePath: "logo/logo_homekoncept.png",
     contentType: "image/png"
   },
   {
     localPath:   path.join(__dirname, "../companies/wasa-t/Ilogo_wasatec.png"),
-    storagePath: "companies/wasat/logo.png",
+    storagePath: "logo/Ilogo_wasatec.png",
     contentType: "image/png"
   }
 ];

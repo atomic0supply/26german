@@ -4,11 +4,20 @@ import { Language, translate } from "../i18n";
 interface SignaturePadProps {
   initialValue?: string;
   disabled?: boolean;
+  autoCommit?: boolean;
+  showCommitButton?: boolean;
   language: Language;
   onChange: (dataUrl: string) => void;
 }
 
-export const SignaturePad = ({ initialValue, disabled, language, onChange }: SignaturePadProps) => {
+export const SignaturePad = ({
+  initialValue,
+  disabled,
+  autoCommit = false,
+  showCommitButton = true,
+  language,
+  onChange
+}: SignaturePadProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
   const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
@@ -91,6 +100,9 @@ export const SignaturePad = ({ initialValue, disabled, language, onChange }: Sig
     }
 
     setDrawing(false);
+    if (autoCommit) {
+      commit();
+    }
   };
 
   const clear = () => {
@@ -136,9 +148,11 @@ export const SignaturePad = ({ initialValue, disabled, language, onChange }: Sig
         <button type="button" onClick={clear} disabled={disabled}>
           {t("Leeren", "Borrar")}
         </button>
-        <button type="button" onClick={commit} disabled={disabled}>
-          {t("Signatur übernehmen", "Guardar firma")}
-        </button>
+        {showCommitButton && (
+          <button type="button" onClick={commit} disabled={disabled}>
+            {t("Signatur übernehmen", "Guardar firma")}
+          </button>
+        )}
       </div>
     </div>
   );

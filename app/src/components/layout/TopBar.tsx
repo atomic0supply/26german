@@ -1,5 +1,5 @@
 import { User } from "firebase/auth";
-import { Language, translate } from "../../i18n";
+import { createTranslator, defaultUserLabel, Language } from "../../i18n";
 import { LanguageSwitch } from "../LanguageSwitch";
 
 interface TopBarProps {
@@ -27,8 +27,8 @@ export const TopBar = ({
   onLogout,
   onToggleNav
 }: TopBarProps) => {
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
-  const userLabel = user.displayName?.trim() || user.email?.trim() || "User";
+  const t = createTranslator(language);
+  const userLabel = user.displayName?.trim() || user.email?.trim() || defaultUserLabel(language);
 
   return (
     <header className="app-topbar">

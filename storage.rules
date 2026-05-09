@@ -47,12 +47,46 @@ service firebase.storage {
 
     match /report-signatures/{reportId}/{fileName} {
       allow read: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin());
-      allow write: if isAppUser() && ownsDraftReport(reportId) && fileName == 'technician.png';
+      allow write: if isAppUser()
+        && ownsDraftReport(reportId)
+        && (fileName == 'technician.png' || fileName == 'customer.png');
+    }
+
+    match /leckortung-signatures/{reportId}/{fileName} {
+      allow read: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin());
+      // Write allowed on any status because the client uploads the signature BEFORE
+      // the Cloud Function resets the report to draft for re-finalization.
+      allow write: if isAppUser() && ownsReport(reportId) && fileName == 'customer.png';
     }
 
     match /report-pdfs/{reportId}/{fileName} {
-      allow read: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin()) && fileName == 'final.pdf';
+      allow read: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin()) && (fileName == 'final.pdf' || fileName == 'leckortung.pdf');
       allow write: if false;
+    }
+
+    match /logo/{fileName} {
+      // Company logos need to be readable in the frontend (e.g. Leckortung modal)
+      allow read: if isAppUser();
+      allow write: if false;
+    }
+
+    match /branding/{fileName} {
+      allow read: if isAppUser();
+      allow write: if isSignedIn() && userDoc().data.active == true && userDoc().data.role == 'admin';
+    }
+
+    match /template/{fileName} {
+      // PDF templates readable by authenticated app users (e.g. preview flows)
+      allow read: if isAppUser();
+      allow write: if false;
+    }
+
+    match /template-imports/{uid}/{fileName} {
+      allow read, write: if isSignedIn() && userDoc().data.active == true && userDoc().data.role == 'admin' && request.auth.uid == uid;
+    }
+
+    match /templates/{templateId}/{allPaths=**} {
+      allow read, write: if false;
     }
 
     match /{allPaths=**} {

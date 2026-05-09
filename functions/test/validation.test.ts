@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { REPORT_TEMPLATE } from "../src/templates";
 import { validateReportForFinalize } from "../src/validation";
 import { ReportData } from "../src/types";
 
@@ -54,14 +53,34 @@ describe("validateReportForFinalize", () => {
 
     const errors = validateReportForFinalize(report);
     expect(errors).toContain("Projektnummer ist erforderlich");
-    expect(errors).toContain("Techniker-Signatur ist erforderlich");
+    expect(errors).not.toContain("Techniker-Signatur ist erforderlich");
   });
 
   it("enforces required template fields", () => {
     const report = baseReport();
     report.templateFields.claimNumber = "";
 
-    const errors = validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields);
+    const errors = validateReportForFinalize(report, ["templateFields.claimNumber"]);
     expect(errors).toContain("templateFields.claimNumber ist erforderlich");
+  });
+
+  it("allows dynamic templates to skip summary and signature when not required", () => {
+    const report = baseReport();
+    report.findings.summary = "";
+    report.signature.storagePath = "";
+
+    expect(
+      validateReportForFinalize(report, [], {
+        requireSummary: false,
+        requireSignature: false
+      })
+    ).toEqual([]);
+  });
+
+  it("does not require technician signature by default", () => {
+    const report = baseReport();
+    report.signature.storagePath = "";
+
+    expect(validateReportForFinalize(report)).toEqual([]);
   });
 });

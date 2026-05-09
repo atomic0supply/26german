@@ -42,7 +42,11 @@ export const ACTION_OPTIONS: LocalizedOption<ActionKey>[] = [
   { key: "rueckbau", deLabel: "Rückbau erforderlich", esLabel: "Se requiere desmontaje" },
   { key: "schimmelbeseitigung", deLabel: "Schimmelbeseitigung erforderlich", esLabel: "Se requiere eliminación de moho" },
   { key: "demontage", deLabel: "Demontage erforderlich", esLabel: "Desmontaje necesario" },
-  { key: "folgetermin", deLabel: "Folgetermin erforderlich", esLabel: "Se requiere cita de seguimiento" }
+  { key: "folgetermin", deLabel: "Folgetermin erforderlich", esLabel: "Se requiere cita de seguimiento" },
+  { key: "hinweiseUndAbsprache", deLabel: "Hinweise und Absprache", esLabel: "Indicaciones y acuerdos" },
+  { key: "infoAnAquaRadar", deLabel: "Info an AquaRadar", esLabel: "Info para AquaRadar" },
+  { key: "sonstigesCheckbox", deLabel: "Sonstiges", esLabel: "Otros" },
+  { key: "abzustimmen", deLabel: "Abzustimmen", esLabel: "Por coordinar" }
 ];
 
 export const TECHNIQUE_OPTIONS: LocalizedTechniqueOption[] = [
@@ -57,10 +61,18 @@ export const TECHNIQUE_OPTIONS: LocalizedTechniqueOption[] = [
   { value: "Endoskopie", deLabel: "Endoskopie", esLabel: "Endoscopia" },
   { value: "Färbemittel", deLabel: "Färbemittel", esLabel: "Colorante" },
   { value: "Spülung", deLabel: "Spülung", esLabel: "Limpieza por arrastre" },
-  { value: "Leitfähigkeit", deLabel: "Leitfähigkeit", esLabel: "Conductividad" }
+  { value: "Leitfähigkeit", deLabel: "Leitfähigkeit", esLabel: "Conductividad" },
+  { value: "Dusch-Simulation", deLabel: "Dusch-Simulation", esLabel: "Simulación de ducha" },
+  { value: "Rauchgas", deLabel: "Rauchgas", esLabel: "Gas de humo" },
+  { value: "Niederschlagssimulation", deLabel: "Niederschlagssimulation", esLabel: "Simulación de lluvia" },
+  { value: "IQM-Messtechnik", deLabel: "IQM-Messtechnik", esLabel: "Técnica de medición IQM" },
+  { value: "Datenlogger", deLabel: "Datenlogger", esLabel: "Registrador de datos" },
+  { value: "Positionsortung", deLabel: "Positionsortung", esLabel: "Localización de posición" },
+  { value: "Pegelmessung", deLabel: "Pegelmessung", esLabel: "Medición de nivel" },
+  { value: "Sonst_Information", deLabel: "Sonstige Information", esLabel: "Otra información" }
 ];
 
-export const PHOTO_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
+export const PHOTO_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] as const;
 
 // ---------------------------------------------------------------------------
 // Empresas

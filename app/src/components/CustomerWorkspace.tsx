@@ -9,11 +9,14 @@ import {
   updateDoc
 } from "firebase/firestore";
 import { db, functions } from "../firebase";
-import { Language, localeForLanguage, translate } from "../i18n";
+import { defaultUserLabel, Language, localeForLanguage, translate } from "../i18n";
 import { createDefaultReport } from "../lib/defaultReport";
 import {
+  canFillLeckortungForReport,
+  canOpenLeckortungPdfForReport,
   canOpenPdfForReport,
   canSendReportEmail,
+  canSendLeckortungEmail,
   ClientWorkspaceTab,
   getClientFullName,
   getClientLastActivity,
@@ -48,7 +51,10 @@ type ClientDraft = {
   principalContact: string;
   email: string;
   phone: string;
-  location: string;
+  street: string;
+  streetNumber: string;
+  postalCode: string;
+  city: string;
 };
 
 type VisitDraft = {
@@ -64,7 +70,10 @@ const EMPTY_CLIENT_FORM: ClientDraft = {
   principalContact: "",
   email: "",
   phone: "",
-  location: ""
+  street: "",
+  streetNumber: "",
+  postalCode: "",
+  city: ""
 };
 
 const createVisitDraft = (clientId = ""): VisitDraft => ({
@@ -113,15 +122,15 @@ const getClientInitials = (client: ClientData) =>
     .slice(0, 2) || "CL";
 
 const MailIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1.2em" height="1.2em" style={{ verticalAlign: "middle" }}>
     <path d="M4 6.5h16v11H4z" fill="none" stroke="currentColor" strokeWidth="1.8" />
     <path d="m5.5 8 6.5 5 6.5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 
 const PhoneIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M8.2 4.8c.5-.5 1.3-.6 1.9-.1l2 1.5c.6.5.8 1.3.4 2l-.8 1.5c1 1.9 2.6 3.5 4.5 4.5l1.5-.8c.7-.4 1.5-.2 2 .4l1.5 2c.5.6.4 1.4-.1 1.9l-1.4 1.4c-.7.7-1.8 1-2.8.7-2.8-.8-5.4-2.3-7.6-4.5s-3.7-4.8-4.5-7.6c-.3-1 .1-2.1.7-2.8Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1.2em" height="1.2em" style={{ verticalAlign: "middle" }}>
+    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
 
@@ -137,6 +146,13 @@ const ReportsIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M7 3.5h7l4 4V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
     <path d="M14 3.5v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  </svg>
+);
+
+const SummaryIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="4" y="5" width="16" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    <path d="M8 10h8M8 14h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
   </svg>
 );
 
@@ -162,6 +178,16 @@ const PdfIcon = () => (
   </svg>
 );
 
+const LeckortungIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M9 3.5H6a1 1 0 0 0-1 1v15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9l-5-5.5H9Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    <path d="M13 3.5V9h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M8.5 13h7M8.5 16.5h4M11 10h1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <circle cx="17.5" cy="17.5" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    <path d="m16.5 17.5 .8.8 1.5-1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 const SendIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M4 12 20 4l-4 16-4.8-6.2L4 12Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
@@ -181,25 +207,32 @@ const PlusIcon = () => (
   </svg>
 );
 
+const MapIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1.2em" height="1.2em" style={{ verticalAlign: "middle" }}>
+    <path d="M12 21.5c-3-4-8-9.5-8-14a8 8 0 1 1 16 0c0 4.5-5 10-8 14z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="12" cy="7.5" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+  </svg>
+);
+
+const CopyIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1em" height="1em" style={{ verticalAlign: "middle" }}>
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const WhatsAppIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1.2em" height="1.2em" style={{ verticalAlign: "middle" }}>
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+
 const SummaryMetric = ({ label, value }: { label: string; value: string | number }) => (
   <article className="crm-metric-card">
     <span>{label}</span>
     <strong>{value}</strong>
   </article>
-);
-
-const DetailTab = ({
-  active,
-  label,
-  onClick
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) => (
-  <button type="button" className={active ? "crm-tab active" : "crm-tab"} onClick={onClick}>
-    {label}
-  </button>
 );
 
 export const CustomerWorkspace = ({
@@ -214,7 +247,7 @@ export const CustomerWorkspace = ({
 }: CustomerWorkspaceProps) => {
   const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
   const locale = localeForLanguage(language);
-  const userLabel = currentUserLabel?.trim() || "User";
+  const userLabel = currentUserLabel?.trim() || defaultUserLabel(language);
   const userEmail = currentUserEmail?.trim() || "";
 
   const [query, setQuery] = useState("");
@@ -228,6 +261,7 @@ export const CustomerWorkspace = ({
   const [saving, setSaving] = useState(false);
   const [creatingVisit, setCreatingVisit] = useState(false);
   const [sendingReportId, setSendingReportId] = useState("");
+  const [sendingLeckortungReportId, setSendingLeckortungReportId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -280,7 +314,10 @@ export const CustomerWorkspace = ({
       principalContact: client.principalContact,
       email: client.email,
       phone: client.phone,
-      location: client.location
+      street: client.street || "",
+      streetNumber: client.streetNumber || "",
+      postalCode: client.postalCode || "",
+      city: client.city || ""
     });
     setSelectedClientId(client.id);
     setClientModalMode("edit");
@@ -312,12 +349,13 @@ export const CustomerWorkspace = ({
       || !clientDraft.principalContact.trim()
       || !clientDraft.email.trim()
       || !clientDraft.phone.trim()
-      || !clientDraft.location.trim()
+      || !clientDraft.street.trim()
+      || !clientDraft.city.trim()
     ) {
       setError(
         t(
-          "Nombre, apellido, contacto principal, correo, teléfono y ubicación son obligatorios.",
-          "Name, Nachname, Hauptkontakt, E-Mail, Telefon und Standort sind erforderlich."
+          "Nombre, apellido, contacto principal, correo, teléfono y dirección (calle, ciudad) son obligatorios.",
+          "Name, Nachname, Hauptkontakt, E-Mail, Telefon und Adresse (Straße, Stadt) sind erforderlich."
         )
       );
       return;
@@ -327,6 +365,8 @@ export const CustomerWorkspace = ({
     setError("");
     setNotice("");
 
+    const computedLocation = `${clientDraft.street.trim()} ${clientDraft.streetNumber.trim()}`.trim() + `, ${clientDraft.postalCode.trim()} ${clientDraft.city.trim()}`.trim();
+
     try {
       if (clientModalMode === "edit" && selectedClient) {
         await updateDoc(doc(db, "clients", selectedClient.id), {
@@ -335,7 +375,11 @@ export const CustomerWorkspace = ({
           principalContact: clientDraft.principalContact.trim(),
           email: clientDraft.email.trim(),
           phone: clientDraft.phone.trim(),
-          location: clientDraft.location.trim(),
+          street: clientDraft.street.trim(),
+          streetNumber: clientDraft.streetNumber.trim(),
+          postalCode: clientDraft.postalCode.trim(),
+          city: clientDraft.city.trim(),
+          location: computedLocation,
           updatedAt: serverTimestamp()
         });
         setNotice(t("Cliente actualizado.", "Kunde aktualisiert."));
@@ -346,7 +390,11 @@ export const CustomerWorkspace = ({
           principalContact: clientDraft.principalContact.trim(),
           email: clientDraft.email.trim(),
           phone: clientDraft.phone.trim(),
-          location: clientDraft.location.trim(),
+          street: clientDraft.street.trim(),
+          streetNumber: clientDraft.streetNumber.trim(),
+          postalCode: clientDraft.postalCode.trim(),
+          city: clientDraft.city.trim(),
+          location: computedLocation,
           createdBy: uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
@@ -478,6 +526,36 @@ export const CustomerWorkspace = ({
     }
   };
 
+  const sendLeckortungByEmail = async (reportId: string, clientId: string) => {
+    if (!isOnline) {
+      setError(t("Sin conexión: no se puede enviar el correo.", "Offline: E-Mail kann nicht gesendet werden."));
+      return;
+    }
+
+    setSendingLeckortungReportId(reportId);
+    setError("");
+    setNotice("");
+
+    try {
+      const callable = httpsCallable<{ reportId: string; clientId: string }, { recipient: string }>(functions, "sendLeckortungEmail");
+      const result = await callable({ reportId, clientId });
+      setNotice(
+        t(
+          `Notificación Leckortung enviada a ${result.data.recipient}.`,
+          `Leckortung-Benachrichtigung an ${result.data.recipient} gesendet.`
+        )
+      );
+    } catch (emailError) {
+      setError(
+        emailError instanceof Error
+          ? emailError.message
+          : t("No se pudo enviar el correo.", "E-Mail konnte nicht gesendet werden.")
+      );
+    } finally {
+      setSendingLeckortungReportId("");
+    }
+  };
+
   const sendReportByEmail = async (reportId: string, clientId: string) => {
     if (!isOnline) {
       setError(t("Sin conexión: no se puede enviar el correo.", "Offline: E-Mail kann nicht gesendet werden."));
@@ -491,7 +569,12 @@ export const CustomerWorkspace = ({
     try {
       const callable = httpsCallable<{ reportId: string; clientId: string }, { recipient: string }>(functions, "sendReportEmail");
       const result = await callable({ reportId, clientId });
-      setNotice(t(`PDF enviado a ${result.data.recipient}.`, `PDF gesendet an ${result.data.recipient}.`));
+      setNotice(
+        t(
+          `Informe enviado a ${result.data.recipient}.`,
+          `Bericht an ${result.data.recipient} gesendet.`
+        )
+      );
     } catch (emailError) {
       setError(
         emailError instanceof Error
@@ -631,54 +714,68 @@ export const CustomerWorkspace = ({
   const renderSummaryTab = (client: ClientData) => (
     <div className="crm-detail-section">
       <div className="crm-summary-grid">
-        <SummaryMetric label={t("Contacto principal", "Hauptkontakt")} value={client.principalContact || "—"} />
-        <SummaryMetric label={t("Correo", "E-Mail")} value={client.email || "—"} />
-        <SummaryMetric label={t("Teléfono", "Telefon")} value={client.phone || "—"} />
-        <SummaryMetric label={t("Informes asignados", "Zugeordnete Berichte")} value={relatedReports.length} />
-        <SummaryMetric label={t("Visitas realizadas", "Abgeschlossene Einsätze")} value={completedVisits.length} />
+        {client.principalContact && (
+          <article className="crm-metric-card">
+            <span>{t("Contacto principal", "Hauptkontakt")}</span>
+            <strong>{client.principalContact}</strong>
+          </article>
+        )}
+        <article className="crm-metric-card">
+          <span>{t("Correo", "E-Mail")}</span>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", justifyContent: "space-between" }}>
+            <strong>{client.email || t("No definido", "Nicht definiert")}</strong>
+            {client.email && (
+              <button
+                type="button"
+                className="ghost icon-only"
+                style={{ padding: "0.2rem" }}
+                onClick={() => void navigator.clipboard.writeText(client.email)}
+                title={t("Copiar", "Kopieren")}
+              >
+                <CopyIcon />
+              </button>
+            )}
+          </div>
+        </article>
+        <article className="crm-metric-card">
+          <span>{t("Teléfono", "Telefon")}</span>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", justifyContent: "space-between" }}>
+            <strong>{client.phone || t("No definido", "Nicht definiert")}</strong>
+            {client.phone && (
+              <button
+                type="button"
+                className="ghost icon-only"
+                style={{ padding: "0.2rem" }}
+                onClick={() => void navigator.clipboard.writeText(client.phone)}
+                title={t("Copiar", "Kopieren")}
+              >
+                <CopyIcon />
+              </button>
+            )}
+          </div>
+        </article>
         <SummaryMetric label={t("Último movimiento", "Letzte Aktivität")} value={formatDate(getClientLastActivity(client, relatedReports), locale)} />
+        <SummaryMetric label={t("Creado", "Angelegt")} value={formatDate(client.createdAt, locale)} />
+        <SummaryMetric label={t("Actualizado", "Aktualisiert")} value={formatDate(client.updatedAt, locale)} />
       </div>
 
       <section className="crm-panel">
         <div className="crm-panel__header">
           <div>
-            <span className="section-card__eyebrow">{t("Resumen operativo", "Operative Übersicht")}</span>
-            <h4>{t("Ficha rápida del cliente", "Schnelle Kundenkarte")}</h4>
-          </div>
-        </div>
-        <div className="crm-info-list">
-          <div>
-            <span>{t("Ubicación", "Standort")}</span>
-            <strong>{client.location || "—"}</strong>
-          </div>
-          <div>
-            <span>{t("Creado", "Angelegt")}</span>
-            <strong>{formatDate(client.createdAt, locale)}</strong>
-          </div>
-          <div>
-            <span>{t("Actualizado", "Aktualisiert")}</span>
-            <strong>{formatDate(client.updatedAt, locale)}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="crm-panel">
-        <div className="crm-panel__header">
-          <div>
             <span className="section-card__eyebrow">{t("Actividad reciente", "Letzte Aktivität")}</span>
-            <h4>{t("Últimos informes vinculados", "Neueste verknüpfte Berichte")}</h4>
+            <h4>{relatedReports.length === 0 ? t("Sin actividad", "Keine Aktivität") : t("Últimos informes", "Neueste Berichte")}</h4>
           </div>
         </div>
         {relatedReports.length === 0 ? (
           <EmptyState
-            title={t("Sin informes todavía", "Noch keine Berichte")}
+            title={t("Sin actividad todavía", "Noch keine Aktivität")}
             description={t(
-              "Cuando este cliente tenga informes o visitas vinculadas aparecerán aquí.",
-              "Sobald für diesen Kunden Berichte oder Einsätze vorhanden sind, erscheinen sie hier."
+              "Este cliente aún no tiene visitas ni informes registrados.",
+              "Dieser Kunde hat noch keine Einsätze oder Berichte."
             )}
             action={
               <button type="button" onClick={() => openVisitModal(client)} disabled={!isOnline}>
-                {t("Crear visita", "Einsatz anlegen")}
+                {t("Crear primera visita", "Ersten Einsatz erstellen")}
               </button>
             }
           />
@@ -688,7 +785,7 @@ export const CustomerWorkspace = ({
               <button key={report.id} type="button" className="crm-mini-report" onClick={() => onOpenReport?.(report.id)}>
                 <div>
                   <strong>{report.projectNumber}</strong>
-                  <p>{report.objectLabel}</p>
+                  <p>{report.objectLabel || client.location || t("Sin ubicación", "Kein Standort")}</p>
                 </div>
                 <small>{formatDateTime(report.updatedAt, locale)}</small>
               </button>
@@ -817,7 +914,11 @@ export const CustomerWorkspace = ({
         <div className="crm-report-list">
           {relatedReports.map((report) => {
             const canOpenPdf = canOpenPdfForReport(report);
-            const canMail = canSendReportEmail(report, client);
+            const canFillLeckortung = canFillLeckortungForReport(report);
+            const hasLeckortungPdf = canOpenLeckortungPdfForReport(report);
+            const canSendReport = canSendReportEmail(report, client);
+            const canSendLeckortung = canSendLeckortungEmail(report, client);
+            const leckortungNotificationSent = report.lastLeckortungEmailDelivery?.sentAt;
 
             return (
               <article key={report.id} className="crm-report-card">
@@ -833,36 +934,87 @@ export const CustomerWorkspace = ({
                     <small>{report.technicianName || userLabel}</small>
                     <small>{formatDateTime(report.updatedAt, locale)}</small>
                     {report.finalization?.finalizedAt ? <small>{formatDate(report.finalization.finalizedAt, locale)}</small> : null}
+                    {leckortungNotificationSent ? (
+                      <small>
+                        {t("Notificación Leckortung enviada", "Leckortung-Benachrichtigung gesendet")}:{" "}
+                        {formatDateTime(leckortungNotificationSent, locale)}
+                      </small>
+                    ) : null}
                   </div>
                 </div>
 
-                <div className="crm-report-card__actions">
-                  <IconButton
-                    label={t("Abrir informe", "Bericht öffnen")}
-                    icon={<EditIcon />}
-                    onClick={() => onOpenReport?.(report.id)}
-                  />
-                  {canOpenPdf ? (
+                <div className="crm-report-card__actions-block">
+                  <small className="crm-report-card__actions-title">
+                    {t("Acciones disponibles", "Verfugbare Aktionen")}
+                  </small>
+                  <div className="crm-report-card__actions">
+                    {!hasLeckortungPdf && (
+                      <IconButton
+                        label={t("Leckortung", "Leckortung")}
+                        description={
+                          report.status === "draft"
+                            ? t("Disponible cuando el informe principal este finalizado.", "Verfugbar, sobald der Hauptbericht finalisiert ist.")
+                            : t("Rellenar y firmar el formulario con el cliente.", "Das Formular mit dem Kunden ausfullen und unterschreiben.")
+                        }
+                        icon={<LeckortungIcon />}
+                        tone="accent"
+                        disabled={!isOnline || !canFillLeckortung}
+                        onClick={() => { window.location.hash = `leckortung/${report.id}`; }}
+                      />
+                    )}
+                    {hasLeckortungPdf && (
+                      <IconButton
+                        label={t("Ver Leckortung PDF", "Leckortung-PDF ansehen")}
+                        description={t(
+                          "Abrir el PDF firmado del Leckortung en una nueva pestaña.",
+                          "Das unterschriebene Leckortung-PDF in einem neuen Tab offnen."
+                        )}
+                        icon={<PdfIcon />}
+                        href={report.leckortungFinalization?.pdfUrl ?? ""}
+                        target="_blank"
+                        rel="noreferrer"
+                      />
+                    )}
                     <IconButton
-                      label={t("Ver PDF", "PDF ansehen")}
+                      label={t("Ver informe PDF", "Bericht-PDF ansehen")}
+                      description={
+                        canOpenPdf
+                          ? t("Abrir el informe tecnico final en una nueva pestaña.", "Den finalen technischen Bericht in einem neuen Tab offnen.")
+                          : t("Solo disponible cuando el informe este guardado y finalizado.", "Nur verfugbar, wenn der Bericht korrekt gespeichert und finalisiert wurde.")
+                      }
                       icon={<PdfIcon />}
-                      href={report.finalization?.pdfUrl ?? ""}
-                      target="_blank"
-                      rel="noreferrer"
+                      href={canOpenPdf ? (report.finalization?.pdfUrl ?? "") : undefined}
+                      target={canOpenPdf ? "_blank" : undefined}
+                      rel={canOpenPdf ? "noreferrer" : undefined}
+                      disabled={!canOpenPdf}
                     />
-                  ) : (
                     <IconButton
-                      label={t("PDF no disponible", "PDF nicht verfügbar")}
-                      icon={<PdfIcon />}
-                      disabled
+                      label={t("Enviar informe", "Bericht senden")}
+                      description={
+                        canSendReport
+                          ? t("Enviar el informe principal al correo del cliente.", "Den Hauptbericht an die E-Mail des Kunden senden.")
+                          : t("Se activara cuando exista el PDF del informe y el cliente tenga correo.", "Wird aktiv, sobald das Bericht-PDF existiert und der Kunde eine E-Mail hat.")
+                      }
+                      icon={<SendIcon />}
+                      disabled={!canSendReport || sendingReportId === report.id}
+                      onClick={() => void sendReportByEmail(report.id, client.id)}
                     />
-                  )}
-                  <IconButton
-                    label={t("Enviar por correo", "Per E-Mail senden")}
-                    icon={<SendIcon />}
-                    disabled={!canMail || sendingReportId === report.id}
-                    onClick={() => void sendReportByEmail(report.id, client.id)}
-                  />
+                    <IconButton
+                      label={
+                        leckortungNotificationSent
+                          ? t("Reenviar Leckortung", "Leckortung erneut senden")
+                          : t("Enviar Leckortung", "Leckortung senden")
+                      }
+                      description={
+                        leckortungNotificationSent
+                          ? t("Volver a enviar el PDF Leckortung al cliente.", "Das Leckortung-PDF erneut an den Kunden senden.")
+                          : t("Enviar el informe Leckortung al correo del cliente.", "Den Leckortung-Bericht an die E-Mail des Kunden senden.")
+                      }
+                      icon={<SendIcon />}
+                      disabled={!canSendLeckortung || sendingLeckortungReportId === report.id}
+                      onClick={() => void sendLeckortungByEmail(report.id, client.id)}
+                    />
+                  </div>
                 </div>
               </article>
             );
@@ -896,73 +1048,91 @@ export const CustomerWorkspace = ({
     >
       <div className="crm-detail">
         <div className="crm-detail__topbar">
-          <div className="crm-detail__hero">
-            <span className="crm-detail__avatar">{getClientInitials(client)}</span>
-            <div className="crm-detail__copy">
-              <span className="section-card__eyebrow">{t("Cliente activo", "Aktiver Kunde")}</span>
-              <h4>{getClientPrimaryLabel(client)}</h4>
-              <p>{client.location || t("Sin ubicación", "Kein Standort")}</p>
-              <div className="crm-detail__badges">
-                <StatusChip tone="info">{t(`${completedVisits.length} visita(s)`, `${completedVisits.length} Einsatz/Einsätze`)}</StatusChip>
-                <StatusChip tone="neutral">{t(`${relatedReports.length} informe(s)`, `${relatedReports.length} Bericht(e)`)}</StatusChip>
-                <StatusChip tone="neutral">{client.principalContact || t("Sin contacto", "Kein Kontakt")}</StatusChip>
+          <div className="crm-detail__hero" style={{ flexDirection: "column", gap: "1.2rem", width: "100%" }}>
+            <div style={{ display: "flex", gap: "1rem", alignItems: "center", width: "100%" }}>
+              <span className="crm-detail__avatar">{getClientInitials(client)}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h4 style={{ margin: 0 }}>{getClientPrimaryLabel(client)}</h4>
+                  <StatusChip tone="info">{t("Cliente activo", "Aktiver Kunde")}</StatusChip>
+                </div>
+                <p style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.25rem", marginBottom: 0 }}>
+                  {client.location || t("Sin ubicación", "Kein Standort")}
+                  {client.location && (
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(client.location)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={t("Ver en el mapa", "Auf der Karte anzeigen")}
+                      title={t("Ver en el mapa", "Auf der Karte anzeigen")}
+                      style={{ color: "inherit", opacity: 0.7, textDecoration: "none", display: "flex" }}
+                    >
+                      <MapIcon />
+                    </a>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <button type="button" onClick={() => openVisitModal(client)} disabled={!isOnline}>
+                  <CalendarIcon />
+                  {t("Nueva visita", "Neuer Einsatz")}
+                </button>
+                {client.email && (
+                  <a className="button-link ghost" href={`mailto:${client.email}`}>
+                    <MailIcon />
+                    {t("Correo", "E-Mail")}
+                  </a>
+                )}
+                {client.phone && (
+                  <a className="button-link ghost" href={`tel:${client.phone}`}>
+                    <PhoneIcon />
+                    {t("Llamar", "Anrufen")}
+                  </a>
+                )}
+                {client.phone && (
+                  <a className="button-link ghost" href={`https://wa.me/${client.phone.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+                    <WhatsAppIcon />
+                    WhatsApp
+                  </a>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button type="button" className="ghost icon-only" onClick={() => openEditClientModal(client)} title={t("Editar", "Bearbeiten")}>
+                  <EditIcon />
+                </button>
+                <button type="button" className="ghost icon-only" onClick={() => setDeleteCandidate(client)} disabled={saving} title={t("Eliminar", "Löschen")}>
+                  <TrashIcon />
+                </button>
               </div>
             </div>
           </div>
-
-          <div className="crm-detail__actions">
-            <button type="button" className="ghost" onClick={() => openEditClientModal(client)}>
-              <EditIcon />
-              {t("Editar", "Bearbeiten")}
-            </button>
-            <button type="button" onClick={() => openVisitModal(client)} disabled={!isOnline}>
-              <CalendarIcon />
-              {t("Nueva visita", "Neuer Einsatz")}
-            </button>
-            <button type="button" className="ghost" onClick={() => setDeleteCandidate(client)} disabled={saving}>
-              <TrashIcon />
-              {t("Eliminar", "Löschen")}
-            </button>
-          </div>
         </div>
 
-        <div className="crm-quick-actions">
-          {client.email ? (
-            <a className="crm-quick-action" href={`mailto:${client.email}`}>
-              <MailIcon />
-              <span>{t("Escribir correo", "E-Mail schreiben")}</span>
-            </a>
-          ) : (
-            <button type="button" className="crm-quick-action ghost" disabled>
-              <MailIcon />
-              <span>{t("Correo pendiente", "E-Mail fehlt")}</span>
-            </button>
-          )}
-          {client.phone ? (
-            <a className="crm-quick-action" href={`tel:${client.phone}`}>
-              <PhoneIcon />
-              <span>{t("Llamar", "Anrufen")}</span>
-            </a>
-          ) : (
-            <button type="button" className="crm-quick-action ghost" disabled>
-              <PhoneIcon />
-              <span>{t("Teléfono pendiente", "Telefon fehlt")}</span>
-            </button>
-          )}
-          <button type="button" className="crm-quick-action ghost" onClick={() => setActiveTab("agenda")}>
-            <CalendarIcon />
-            <span>{t("Agenda", "Agenda")}</span>
+        <div className="crm-tabs">
+          <button
+            type="button"
+            className={activeTab === "summary" ? "crm-tab active" : "crm-tab"}
+            onClick={() => setActiveTab("summary")}
+          >
+            {t("Resumen", "Übersicht")}
           </button>
-          <button type="button" className="crm-quick-action ghost" onClick={() => setActiveTab("reports")}>
-            <ReportsIcon />
-            <span>{t("Informes", "Berichte")}</span>
+          <button
+            type="button"
+            className={activeTab === "agenda" ? "crm-tab active" : "crm-tab"}
+            onClick={() => setActiveTab("agenda")}
+          >
+            {t("Agenda", "Agenda")}
           </button>
-        </div>
-
-        <div className="crm-tabs" role="tablist" aria-label={t("Secciones del cliente", "Kundenbereiche")}>
-          <DetailTab active={activeTab === "summary"} label={t("Resumen", "Übersicht")} onClick={() => setActiveTab("summary")} />
-          <DetailTab active={activeTab === "agenda"} label={t("Agenda", "Agenda")} onClick={() => setActiveTab("agenda")} />
-          <DetailTab active={activeTab === "reports"} label={t("Informes", "Berichte")} onClick={() => setActiveTab("reports")} />
+          <button
+            type="button"
+            className={activeTab === "reports" ? "crm-tab active" : "crm-tab"}
+            onClick={() => setActiveTab("reports")}
+          >
+            {t("Informes", "Berichte")}
+          </button>
         </div>
 
         {activeTab === "summary" && renderSummaryTab(client)}
@@ -1038,10 +1208,31 @@ export const CustomerWorkspace = ({
               <input value={clientDraft.phone} onChange={(event) => setClientDraft((current) => ({ ...current, phone: event.target.value }))} />
             </label>
             <label>
-              {t("Dirección / ubicación", "Adresse / Standort")}
+              {t("Calle", "Straße")}
               <input
-                value={clientDraft.location}
-                onChange={(event) => setClientDraft((current) => ({ ...current, location: event.target.value }))}
+                value={clientDraft.street}
+                onChange={(event) => setClientDraft((current) => ({ ...current, street: event.target.value }))}
+              />
+            </label>
+            <label>
+              {t("Número", "Hausnummer")}
+              <input
+                value={clientDraft.streetNumber}
+                onChange={(event) => setClientDraft((current) => ({ ...current, streetNumber: event.target.value }))}
+              />
+            </label>
+            <label>
+              {t("Código Postal", "PLZ")}
+              <input
+                value={clientDraft.postalCode}
+                onChange={(event) => setClientDraft((current) => ({ ...current, postalCode: event.target.value }))}
+              />
+            </label>
+            <label>
+              {t("Ciudad", "Stadt")}
+              <input
+                value={clientDraft.city}
+                onChange={(event) => setClientDraft((current) => ({ ...current, city: event.target.value }))}
               />
             </label>
           </div>
@@ -1140,6 +1331,7 @@ export const CustomerWorkspace = ({
           </small>
         </div>
       </Dialog>
+
     </div>
   );
 };

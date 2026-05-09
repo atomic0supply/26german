@@ -1,4 +1,4 @@
-import { Language, localeForLanguage, translate } from "../i18n";
+import { createTranslator, Language, localeForLanguage } from "../i18n";
 import { SectionCard } from "./ui/SectionCard";
 import { StatusChip } from "./ui/StatusChip";
 import { VisitItem } from "./VisitCalendar";
@@ -13,14 +13,14 @@ interface VisitListProps {
 }
 
 export const VisitList = ({ visits, language, onOpenReport, onNotifyVisit, notifyingVisitId = "", isOnline = true }: VisitListProps) => {
-  const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
   const locale = localeForLanguage(language);
 
   return (
     <SectionCard
-      title={t("Lista operativa", "Operative Liste")}
+      title={t("Operative Liste", "Lista operativa")}
       eyebrow={t("Agenda", "Agenda")}
-      description={t("Visitas agrupadas por prioridad y estado.", "Termine nach Priorität und Status gruppiert.")}
+      description={t("Termine nach Priorität und Status gruppiert.", "Visitas agrupadas por prioridad y estado.")}
     >
       <div className="visit-list">
         {visits.map((visit) => (
@@ -32,22 +32,22 @@ export const VisitList = ({ visits, language, onOpenReport, onNotifyVisit, notif
               </div>
               <StatusChip tone={visit.status === "done" ? "success" : visit.status === "draft" ? "warning" : "info"}>
                 {visit.status === "done"
-                  ? t("Completada", "Abgeschlossen")
+                  ? t("Abgeschlossen", "Completada")
                   : visit.status === "draft"
-                    ? t("Informe en curso", "Bericht läuft")
-                    : t("Programada", "Geplant")}
+                    ? t("Bericht läuft", "Informe en curso")
+                    : t("Geplant", "Programada")}
               </StatusChip>
             </div>
             <div className="visit-card__meta">
               <span>{new Date(visit.when).toLocaleString(locale)}</span>
-              <span>{visit.durationMinutes ? t(`${visit.durationMinutes} min`, `${visit.durationMinutes} Min.`) : t("60 min", "60 Min.")}</span>
+              <span>{visit.durationMinutes ? t(`${visit.durationMinutes} Min.`, `${visit.durationMinutes} min`) : t("60 Min.", "60 min")}</span>
               <span>{visit.technician}</span>
             </div>
             {visit.clientLabel && <small>{visit.clientLabel}</small>}
             <div className="row">
               {visit.reportId && (
                 <button type="button" className="ghost" onClick={() => onOpenReport?.(visit.reportId!)}>
-                  {t("Abrir informe", "Bericht öffnen")}
+                  {t("Bericht öffnen", "Abrir informe")}
                 </button>
               )}
               {visit.reportId && (
@@ -57,16 +57,16 @@ export const VisitList = ({ visits, language, onOpenReport, onNotifyVisit, notif
                   onClick={() => onNotifyVisit?.(visit.reportId!)}
                 >
                   {notifyingVisitId === visit.reportId
-                    ? t("Notificando...", "Benachrichtigt...")
+                    ? t("Benachrichtigt...", "Notificando...")
                     : visit.notificationSentAt
-                      ? t("Reenviar correo", "E-Mail erneut senden")
-                      : t("Notificar por correo", "Per E-Mail benachrichtigen")}
+                      ? t("E-Mail erneut senden", "Reenviar correo")
+                      : t("Per E-Mail benachrichtigen", "Notificar por correo")}
                 </button>
               )}
             </div>
             {visit.notificationSentAt && (
               <small>
-                {t("Correo enviado", "E-Mail gesendet")}: {new Date(visit.notificationSentAt).toLocaleString(locale)}
+                {t("E-Mail gesendet", "Correo enviado")}: {new Date(visit.notificationSentAt).toLocaleString(locale)}
               </small>
             )}
           </article>

@@ -89,7 +89,7 @@ service cloud.firestore {
         && request.resource.data.status == 'draft';
 
       allow delete: if isAppUser()
-        && resource.data.createdBy == request.auth.uid
+        && (resource.data.createdBy == request.auth.uid || isOfficeOrAdmin())
         && resource.data.status == 'draft';
 
       match /photos/{photoId} {
@@ -102,6 +102,16 @@ service cloud.firestore {
 
     match /config/{docId} {
       allow read, write: if isAdmin();
+    }
+
+    match /templates/{templateId} {
+      allow read: if isAppUser() && (resource.data.status == 'published' || isAdmin());
+      allow create, update, delete: if isAdmin();
+
+      match /versions/{versionId} {
+        allow read: if isAppUser() && (resource.data.status == 'published' || isAdmin());
+        allow create, update, delete: if isAdmin();
+      }
     }
   }
 }

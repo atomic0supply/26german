@@ -6,7 +6,7 @@ import {
   setPersistence,
   browserLocalPersistence
 } from "firebase/auth";
-import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
+import { connectFirestoreEmulator, initializeFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 import { connectStorageEmulator, getStorage } from "firebase/storage";
 
@@ -21,11 +21,17 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+const useEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === "true";
+const isSafariBrowser = typeof navigator !== "undefined"
+  && /safari/i.test(navigator.userAgent)
+  && !/chrome|chromium|android/i.test(navigator.userAgent);
 
 export const auth = getAuth(app);
 setPersistence(auth, browserLocalPersistence).catch(() => undefined);
 
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, isSafariBrowser
+  ? { experimentalForceLongPolling: true }
+  : { experimentalAutoDetectLongPolling: true });
 export const storage = getStorage(app);
 export const functions = getFunctions(app, "europe-west3");
 
@@ -38,8 +44,6 @@ if (typeof window !== "undefined") {
     })
     .catch(() => undefined);
 }
-
-const useEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === "true";
 
 const hasRequiredConfig = [
   firebaseConfig.apiKey,

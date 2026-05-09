@@ -5,72 +5,81 @@ import { CompanyConfig, CompanyId, TemplateConfig, TemplateFieldMap } from "./ty
 // Nota: algunos nombres de campo tienen espacios finales (tal como están en el PDF)
 // ---------------------------------------------------------------------------
 const FIELD_MAP: TemplateFieldMap = {
-  // Cabecera repetida en todas las páginas
-  "projectInfo.projectNumber": "Projektnummer",
-  "projectInfo.appointmentDate": "Messtermin",
-  "projectInfo.technicianName":  "Messtechniker",
-  "projectInfo.locationObject":  "Messort  / Objekt: ",
+  // Cabecera
+  "projectInfo.projectNumber":     "Projektnummer",
+  "projectInfo.appointmentDate":   "messtermin",
+  "projectInfo.technicianName":    "Messtechniker",
+  "projectInfo.locationObject":    "MessortObjekt_name",
+  "projectInfo.auftragserteilung": "Auftragserteilung",
 
-  // Contacto cliente (Kunde) — lado izquierdo página 1
-  "contacts.name1":   ["Kunde", "kunde_name"],
-  "contacts.street1": "kunde_Strabe",
+  // Kunde (lado izquierdo)
+  "contacts.name1":   ["kunde", "kunde_name"],
+  "contacts.street1": "kunde_strabe",
   "contacts.city1":   "kunde_ort",
-  "contacts.phone1":  "kunde_telef",
+  "contacts.phone1":  "kunde_telefon",
   "contacts.mobile1": "kunde_mobil",
   "contacts.email":   "kunde_email",
 
-  // Contacto Messort — lado derecho página 1
-  "contacts.name2":   "messort_name",
-  "contacts.street2": "messort_strabe",
-  "contacts.city2":   "messort_ort",
-  "contacts.phone2":  "messort_telefo",
-  "contacts.mobile2": "messort_mobil",
-  "actions.coordinateWith": "messort_shehekunde",
+  // MessortObjekt (lado derecho)
+  "contacts.name2":   "MessortObjekt_name",
+  "contacts.street2": "MessortObjekt_strabe",
+  "contacts.city2":   "MessortObjekt_ort",
+  "contacts.phone2":  "MessortObjekt_telefon",
+  "contacts.mobile2": "MessortObjekt_mobil",
+  "actions.coordinateWith": "MessortObjekt_siehekunde",
 
-  // Checkboxes de daño (página 1)
-  "damageChecklist.flags.feuchteschaden": "Feuchteschaden  ",
-  "damageChecklist.flags.druckabfall":    "Druckabfall",
-  "damageChecklist.flags.wasserverlust":  "Wasserverlust",
-  "damageChecklist.flags.wasseraustritt": "Wasseraustritt",
-  "damageChecklist.flags.schimmel":       "Schimmel",
+  // Schadensbild
+  "damageChecklist.flags.feuchteschaden": "Schadensbild_Feuchteschaden",
+  "damageChecklist.flags.druckabfall":    "Schadensbild_Druckabfall",
+  "damageChecklist.flags.wasserverlust":  "schadensbild_wasserverlust",
+  "damageChecklist.flags.wasseraustritt": "Schadensbild_Wasseraustritt",
+  "damageChecklist.flags.schimmel":       "schadensbild_wasseraustritt",
 
-  // Checkboxes de asistentes (página 1)
-  "attendees.flags.eigentumer":   "Eigentümer ",
-  "attendees.flags.mieter":       "Mieter",
-  "attendees.flags.installateur": "Installateur",
-  "attendees.flags.hausmeister":  "Hausmeister",
-  "attendees.flags.hv":           "HV",
-  "attendees.flags.versicherung": "Versicherung",
+  // Anwesende
+  "attendees.flags.eigentumer":   "Anwesende_Eigentümer",
+  "attendees.flags.mieter":       "Anwesende_mieter",
+  "attendees.flags.installateur": "Anwesende_installateur",
+  "attendees.flags.hausmeister":  "Anwesende_hausmeister",
+  "attendees.flags.hv":           "Anwesende_HV",
+  "attendees.flags.versicherung": "Anwesende_versicherung",
 
-  // Checkboxes de hallazgos (página 1)
-  "findings.causeFound":    "Ursache_gefunden",
-  "findings.causeExposed":  "Ursache_freigelegt",
-  "findings.temporarySeal": "Notabdichtung",
+  // Ergebnis der Überprüfung
+  "findings.causeFound":    "Ergebnis_ja",
+  "findings.causeExposed":  "Ergebnis_ursache_freigelegt",
+  "findings.temporarySeal": "Ergebnis_Notabdichtung",
 
-  // Checkboxes de acciones (página 1) — nombres exactos del PDF
-  "actions.flags.technischeTrocknung":  "Techntrocknung",
-  "actions.flags.fussbodenheizung":     "Fubodenheizung",
-  "actions.flags.reparaturInstallateur":"ReparaturdurchInstallateur",
-  "actions.flags.folgegewerke":         "Folgegewerkeerforderlich",
-  "actions.flags.ersatzfliesen":        "Ersatzfliesenvorhanden  ",
-  "actions.flags.rueckbau":             "Rückbauerforderlich",
-  "actions.flags.schimmelbeseitigung":  "Schimmelbeseitigungerforderlich",
-  "actions.flags.demontage":            "Demontageerforderlich",
-  "actions.flags.folgetermin":          "Folgeterminerforderlich  ",
+  // Weiteres (acciones)
+  "actions.flags.technischeTrocknung":  "Weiteres_Techn_Trocknung",
+  "actions.flags.fussbodenheizung":     "Weiteres_Fußbodenheizung",
+  "actions.flags.reparaturInstallateur":"Weiteres_Reparatur_durch_Installateur",
+  "actions.flags.folgegewerke":         "Weiteres_Folgegewerke_erforderlich",
+  "actions.flags.ersatzfliesen":        "Weiteres_Ersatzfliesen_vorhanden",
+  "actions.flags.rueckbau":             "Weiteres_Rückbau_erforderlich",
+  "actions.flags.schimmelbeseitigung":  "Weiteres_Schimmelbeseitigung_erforderlich",
+  "actions.flags.demontage":            "Weiteres_Demontage_erforderlich",
+  "actions.flags.folgetermin":          "Weiteres_Folgetermin_erforderlich",
+  "actions.flags.hinweiseUndAbsprache": "Weiteres_Hinweise_und_Absprache",
+  "actions.flags.infoAnAquaRadar":      "Weiteres_Info_an_Aqua-Radar",
+  "actions.flags.sonstigesCheckbox":    "Weiteres_Sonstiges_checkbox",
+  "actions.flags.abzustimmen":          "Weiteres_Abzustimmen_mit_checkbox",
 
-  // Áreas de texto (página 2)
-  "findings.summary":       "Einsatzbericht",
-  "actions.agreedWith":     "Schadengefunden ",
-  "damageChecklist.notes":  "Schadengefunden_text",
-
+  // Texto libre
+  "findings.summary": "Einsatzbericht_text",
 };
 
 // ---------------------------------------------------------------------------
 // Plantillas AcroForm (selección dinámica según Auftragserteilung)
 // ---------------------------------------------------------------------------
 const FIELD_MAP_ALL: TemplateFieldMap = {
-  ...FIELD_MAP,
-  "projectInfo.auftragserteilung": "Auftragserteilung"
+  ...FIELD_MAP
+};
+
+const OPTIONAL_FIELD_MAP: TemplateFieldMap = {
+  "templateFields.sonstiges":      "Weiteres_Sonstiges_text",
+  "templateFields.abzustimmenText": "Weiteres_Abzustimmen_mit_text",
+  "billing.from":                "von",
+  "billing.to":                  "bis",
+  "billing.workDate":            "Abrechnung_Arbeitszeit_1_date"
 };
 
 export const REPORT_TEMPLATE_PROK: TemplateConfig = {
@@ -78,6 +87,7 @@ export const REPORT_TEMPLATE_PROK: TemplateConfig = {
   name: "Plantilla AcroForm",
   pdfTemplatePath: "template/template-prok15.pdf",
   fieldMap: FIELD_MAP,
+  optionalFieldMap: OPTIONAL_FIELD_MAP,
   signatureField: "",
   requiredTemplateFields: [
     "projectInfo.projectNumber",
@@ -90,6 +100,7 @@ export const REPORT_TEMPLATE_ALL: TemplateConfig = {
   name: "Plantilla AcroForm (Auftragserteilung)",
   pdfTemplatePath: "template/template-all15.pdf",
   fieldMap: FIELD_MAP_ALL,
+  optionalFieldMap: OPTIONAL_FIELD_MAP,
   signatureField: "",
   requiredTemplateFields: [
     "projectInfo.projectNumber",
@@ -142,3 +153,28 @@ export const COMPANIES: Record<CompanyId, CompanyConfig> = {
 
 export const getCompany = (id: CompanyId | undefined): CompanyConfig | undefined =>
   id ? COMPANIES[id] : undefined;
+
+// ---------------------------------------------------------------------------
+// Plantilla LECKORTUNG (detección de fugas)
+// Campos AcroForm reales del PDF template-LECKORTUNG.pdf
+// ---------------------------------------------------------------------------
+const FIELD_MAP_LECKORTUNG: TemplateFieldMap = {
+  "templateFields.auftragnehmer": "text_1dvn",                   // Auftragnehmer
+  "projectInfo.locationObject":   "text_3clwz",                  // Schadenort
+  "contacts.name1":               ["text_4mvzb", "text_11epzm"], // Name + Kunde
+  "templateFields.leistung":      "text_6xbjk",                  // Leistung
+  "templateFields.hinweis":       "text_7yyii",                  // Hinweis / Haftung
+  "templateFields.ortDatum":      "text_9wuas",                  // Ort/Datum
+};
+
+export const REPORT_TEMPLATE_LECKORTUNG: TemplateConfig = {
+  id: "leckortung",
+  name: "Leckortung",
+  pdfTemplatePath: "template/template-LECKORTUNG.pdf",
+  fieldMap: FIELD_MAP_LECKORTUNG,
+  signatureField: "signature_10ubdv",
+  requiredTemplateFields: [
+    "projectInfo.locationObject",
+    "contacts.name1"
+  ]
+};

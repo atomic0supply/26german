@@ -15,6 +15,13 @@ import { Language, localeForLanguage, translate } from "../i18n";
 import { toIsoString } from "../lib/firestore";
 import { ClientData } from "../types";
 
+const MapIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="1.2em" height="1.2em" style={{ verticalAlign: "middle" }}>
+    <path d="M12 21.5c-3-4-8-9.5-8-14a8 8 0 1 1 16 0c0 4.5-5 10-8 14z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="12" cy="7.5" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+  </svg>
+);
+
 interface ClientManagerProps {
   uid: string;
   isOnline: boolean;
@@ -30,21 +37,30 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
     principalContact: string;
     email: string;
     phone: string;
-    location: string;
+    street: string;
+    streetNumber: string;
+    postalCode: string;
+    city: string;
   }>({
     name: "",
     surname: "",
     principalContact: "",
     email: "",
     phone: "",
-    location: ""
+    street: "",
+    streetNumber: "",
+    postalCode: "",
+    city: ""
   });
   const [name, setName] = useState("");
   const [surname, setSurname] = useState("");
   const [principalContact, setPrincipalContact] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [location, setLocation] = useState("");
+  const [street, setStreet] = useState("");
+  const [streetNumber, setStreetNumber] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [city, setCity] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -69,6 +85,10 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
               email: String(data.email ?? ""),
               phone: String(data.phone ?? ""),
               location: String(data.location ?? ""),
+              street: String(data.street ?? ""),
+              streetNumber: String(data.streetNumber ?? ""),
+              postalCode: String(data.postalCode ?? ""),
+              city: String(data.city ?? ""),
               createdBy: String(data.createdBy ?? uid),
               createdAt: toIsoString(data.createdAt),
               updatedAt: toIsoString(data.updatedAt)
@@ -96,11 +116,11 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
       return;
     }
 
-    if (!name.trim() || !surname.trim() || !principalContact.trim() || !email.trim() || !phone.trim() || !location.trim()) {
+    if (!name.trim() || !surname.trim() || !principalContact.trim() || !email.trim() || !phone.trim() || !street.trim() || !city.trim()) {
       setError(
         t(
-          "Bitte Name, Nachname, Hauptkontakt, E-Mail, Telefon und Standort ausfüllen.",
-          "Completa nombre, apellido, contacto principal, correo, teléfono y ubicación."
+          "Bitte Name, Nachname, Hauptkontakt, E-Mail, Telefon und Adresse (Straße, Stadt) ausfüllen.",
+          "Completa nombre, apellido, contacto principal, correo, teléfono y dirección (calle, ciudad)."
         )
       );
       return;
@@ -110,6 +130,8 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
     setError("");
     setNotice("");
 
+    const computedLocation = `${street.trim()} ${streetNumber.trim()}`.trim() + `, ${postalCode.trim()} ${city.trim()}`.trim();
+
     try {
       await addDoc(collection(db, "clients"), {
         name: name.trim(),
@@ -117,7 +139,11 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
         principalContact: principalContact.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        location: location.trim(),
+        street: street.trim(),
+        streetNumber: streetNumber.trim(),
+        postalCode: postalCode.trim(),
+        city: city.trim(),
+        location: computedLocation,
         createdBy: uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -128,7 +154,10 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
       setPrincipalContact("");
       setEmail("");
       setPhone("");
-      setLocation("");
+      setStreet("");
+      setStreetNumber("");
+      setPostalCode("");
+      setCity("");
       setNotice(t("Kunde gespeichert.", "Cliente guardado."));
     } catch (createError) {
       const message = createError instanceof Error ? createError.message : t("Kunde konnte nicht gespeichert werden", "No se pudo guardar el cliente");
@@ -149,13 +178,19 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
     setNotice("");
 
     try {
+      const computedLocation = `${client.street?.trim() || ""} ${client.streetNumber?.trim() || ""}`.trim() + `, ${client.postalCode?.trim() || ""} ${client.city?.trim() || ""}`.trim();
+
       await updateDoc(doc(db, "clients", client.id), {
         name: client.name.trim(),
         surname: client.surname.trim(),
         principalContact: client.principalContact.trim(),
         email: client.email.trim(),
         phone: client.phone.trim(),
-        location: client.location.trim(),
+        street: client.street?.trim() || "",
+        streetNumber: client.streetNumber?.trim() || "",
+        postalCode: client.postalCode?.trim() || "",
+        city: client.city?.trim() || "",
+        location: computedLocation,
         updatedAt: serverTimestamp()
       });
       setNotice(t("Kunde aktualisiert.", "Cliente actualizado."));
@@ -205,14 +240,17 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
       principalContact: client.principalContact,
       email: client.email,
       phone: client.phone,
-      location: client.location
+      street: client.street || "",
+      streetNumber: client.streetNumber || "",
+      postalCode: client.postalCode || "",
+      city: client.city || ""
     });
     setError("");
     setNotice("");
   };
 
   const updateEditingDraft = (
-    key: "name" | "surname" | "principalContact" | "email" | "phone" | "location",
+    key: "name" | "surname" | "principalContact" | "email" | "phone" | "street" | "streetNumber" | "postalCode" | "city",
     value: string
   ) => {
     setEditingDraft((previous) => ({
@@ -229,7 +267,10 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
       principalContact: editingDraft.principalContact,
       email: editingDraft.email,
       phone: editingDraft.phone,
-      location: editingDraft.location
+      street: editingDraft.street,
+      streetNumber: editingDraft.streetNumber,
+      postalCode: editingDraft.postalCode,
+      city: editingDraft.city
     });
   };
 
@@ -284,11 +325,41 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
           </label>
 
           <label>
-            {t("Standort", "Ubicación")}
+            {t("Straße", "Calle")}
             <input
-              value={location}
-              onChange={(event) => setLocation(event.target.value)}
-              placeholder={t("Straße / Stadt", "Calle / Ciudad")}
+              value={street}
+              onChange={(event) => setStreet(event.target.value)}
+              placeholder={t("Musterstraße", "Calle Principal")}
+              required
+            />
+          </label>
+
+          <label>
+            {t("Hausnummer", "Número")}
+            <input
+              value={streetNumber}
+              onChange={(event) => setStreetNumber(event.target.value)}
+              placeholder="123"
+              required
+            />
+          </label>
+
+          <label>
+            {t("PLZ", "Código Postal")}
+            <input
+              value={postalCode}
+              onChange={(event) => setPostalCode(event.target.value)}
+              placeholder="28001"
+              required
+            />
+          </label>
+
+          <label>
+            {t("Stadt", "Ciudad")}
+            <input
+              value={city}
+              onChange={(event) => setCity(event.target.value)}
+              placeholder={t("Berlin", "Madrid")}
               required
             />
           </label>
@@ -348,10 +419,34 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
               </label>
 
               <label>
-                {t("Standort", "Ubicación")}
+                {t("Straße", "Calle")}
                 <input
-                  value={editingDraft.location}
-                  onChange={(event) => updateEditingDraft("location", event.target.value)}
+                  value={editingDraft.street}
+                  onChange={(event) => updateEditingDraft("street", event.target.value)}
+                />
+              </label>
+              
+              <label>
+                {t("Hausnummer", "Número")}
+                <input
+                  value={editingDraft.streetNumber}
+                  onChange={(event) => updateEditingDraft("streetNumber", event.target.value)}
+                />
+              </label>
+
+              <label>
+                {t("PLZ", "Código Postal")}
+                <input
+                  value={editingDraft.postalCode}
+                  onChange={(event) => updateEditingDraft("postalCode", event.target.value)}
+                />
+              </label>
+
+              <label>
+                {t("Stadt", "Ciudad")}
+                <input
+                  value={editingDraft.city}
+                  onChange={(event) => updateEditingDraft("city", event.target.value)}
                 />
               </label>
 
@@ -374,7 +469,21 @@ export const ClientManager = ({ uid, isOnline, language }: ClientManagerProps) =
                 <p><strong>{t("Hauptkontakt", "Contacto principal")}:</strong> {client.principalContact || "-"}</p>
                 <p><strong>{t("E-Mail", "Correo")}:</strong> {client.email || "-"}</p>
                 <p><strong>{t("Telefon", "Teléfono")}:</strong> {client.phone || "-"}</p>
-                <p><strong>{t("Standort", "Ubicación")}:</strong> {client.location || "-"}</p>
+                <p>
+                  <strong>{t("Standort", "Ubicación")}:</strong> {client.location || "-"}
+                  {client.location && (
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(client.location)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={t("Ver en el mapa", "Auf der Karte anzeigen")}
+                      title={t("Ver en el mapa", "Auf der Karte anzeigen")}
+                      style={{ marginLeft: "0.5rem", color: "inherit", opacity: 0.7, textDecoration: "none" }}
+                    >
+                      <MapIcon />
+                    </a>
+                  )}
+                </p>
               </div>
 
               <div className="row">

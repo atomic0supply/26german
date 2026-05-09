@@ -1,6 +1,14 @@
 import { Language, translate } from "../i18n";
 import { ReportData } from "../types";
 
+interface ValidationOptions {
+  requireSummary?: boolean;
+  requireSignature?: boolean;
+  requireProjectNumber?: boolean;
+  requireAppointmentDate?: boolean;
+  requireTechnicianName?: boolean;
+}
+
 const getValueByPath = (source: unknown, path: string): unknown =>
   path.split(".").reduce<unknown>((current, segment) => {
     if (!current || typeof current !== "object") {
@@ -28,24 +36,36 @@ const buildRequiredMessage = (label: string, language: Language): string =>
 export const validateReportForFinalize = (
   report: ReportData,
   requiredTemplateFields: string[] = [],
-  language: Language = "de"
+  language: Language = "de",
+  options: ValidationOptions = {}
 ): string[] => {
   const errors: string[] = [];
+  const {
+    requireSummary = true,
+    requireSignature = false,
+    requireProjectNumber = true,
+    requireAppointmentDate = true,
+    requireTechnicianName = true
+  } = options;
 
-  if (!report.projectInfo.projectNumber.trim()) {
+  if (requireProjectNumber && !report.projectInfo.projectNumber.trim()) {
     errors.push(buildRequiredMessage(translate(language, "Projektnummer", "Número de proyecto"), language));
   }
 
-  if (!report.projectInfo.appointmentDate.trim()) {
+  if (requireAppointmentDate && !report.projectInfo.appointmentDate.trim()) {
     errors.push(buildRequiredMessage(translate(language, "Messtermin", "Fecha de la visita"), language));
   }
 
-  if (!report.projectInfo.technicianName.trim()) {
+  if (requireTechnicianName && !report.projectInfo.technicianName.trim()) {
     errors.push(buildRequiredMessage(translate(language, "Messtechniker", "Técnico"), language));
   }
 
-  if (!report.findings.summary.trim()) {
+  if (requireSummary && !report.findings.summary.trim()) {
     errors.push(buildRequiredMessage(translate(language, "Ergebnis der Überprüfung", "Resultado de la revisión"), language));
+  }
+
+  if (requireSignature && !report.signature.storagePath?.trim()) {
+    errors.push(buildRequiredMessage(translate(language, "Techniker-Signatur", "Firma del técnico"), language));
   }
 
   requiredTemplateFields.forEach((fieldPath) => {

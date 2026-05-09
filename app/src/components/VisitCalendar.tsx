@@ -56,6 +56,7 @@ interface DragState {
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 const pad = (n: number) => n.toString().padStart(2, "0");
+const toLocalDateString = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
 const buildWeekDays = (seed: string): string[] => {
   const base = new Date(seed + "T00:00:00");
@@ -64,7 +65,7 @@ const buildWeekDays = (seed: string): string[] => {
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(base);
     d.setDate(base.getDate() + i);
-    return d.toISOString().slice(0, 10);
+    return toLocalDateString(d);
   });
 };
 
@@ -78,13 +79,13 @@ const buildMonthGrid = (year: number, month: number): MonthGrid => {
   startDow = startDow === 0 ? 6 : startDow - 1;
   const cells: MonthCell[] = [];
   for (let i = startDow - 1; i >= 0; i--)
-    cells.push({ date: new Date(year, month, -i).toISOString().slice(0, 10), isCurrentMonth: false });
+    cells.push({ date: toLocalDateString(new Date(year, month, -i)), isCurrentMonth: false });
   for (let d = 1; d <= last.getDate(); d++)
-    cells.push({ date: new Date(year, month, d).toISOString().slice(0, 10), isCurrentMonth: true });
+    cells.push({ date: toLocalDateString(new Date(year, month, d)), isCurrentMonth: true });
   const rem = cells.length % 7;
   if (rem > 0)
     for (let i = 1; i <= 7 - rem; i++)
-      cells.push({ date: new Date(year, month + 1, i).toISOString().slice(0, 10), isCurrentMonth: false });
+      cells.push({ date: toLocalDateString(new Date(year, month + 1, i)), isCurrentMonth: false });
   const grid: MonthGrid = [];
   for (let r = 0; r < cells.length / 7; r++) grid.push(cells.slice(r * 7, r * 7 + 7));
   return grid;
@@ -499,7 +500,7 @@ export const VisitCalendar = ({
   visits, selectedDate, language, onSelectDate, onSlotClick, onVisitClick, onMoveVisit, onResizeVisit,
 }: VisitCalendarProps) => {
   const locale = localeForLanguage(language);
-  const today  = new Date().toISOString().slice(0, 10);
+  const today  = toLocalDateString(new Date());
 
   const [view, setView] = useState<"week" | "month">("week");
   const [navMonth, setNavMonth] = useState(() => {
@@ -529,12 +530,12 @@ export const VisitCalendar = ({
   const handlePrevWeek = () => {
     const d = new Date(weekDays[0] + "T00:00:00");
     d.setDate(d.getDate() - 7);
-    onSelectDate(d.toISOString().slice(0, 10));
+    onSelectDate(toLocalDateString(d));
   };
   const handleNextWeek = () => {
     const d = new Date(weekDays[6] + "T00:00:00");
     d.setDate(d.getDate() + 1);
-    onSelectDate(d.toISOString().slice(0, 10));
+    onSelectDate(toLocalDateString(d));
   };
   const handleToday = () => onSelectDate(today);
 

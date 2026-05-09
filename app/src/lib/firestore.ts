@@ -68,7 +68,8 @@ export const normalizeReportData = (raw: unknown): ReportData => {
   return {
     ...fallback,
     ...source,
-    brandTemplateId: fallback.brandTemplateId,
+    brandTemplateId: String(source.brandTemplateId ?? fallback.brandTemplateId),
+    templateVersionId: source.templateVersionId ?? fallback.templateVersionId,
     templateName: source.templateName ?? fallback.templateName,
     clientId: source.clientId ?? fallback.clientId,
     projectInfo: { ...fallback.projectInfo, ...(source.projectInfo ?? {}) },
@@ -112,6 +113,24 @@ export const normalizeReportData = (raw: unknown): ReportData => {
       ? {
           ...source.finalization,
           finalizedAt: toIsoString(source.finalization.finalizedAt)
+        }
+      : undefined,
+    leckortungFinalization: source.leckortungFinalization
+      ? {
+          ...source.leckortungFinalization,
+          finalizedAt: toIsoString(source.leckortungFinalization.finalizedAt)
+        }
+      : undefined,
+    lastEmailDelivery: source.lastEmailDelivery
+      ? {
+          ...source.lastEmailDelivery,
+          sentAt: toIsoString(source.lastEmailDelivery.sentAt)
+        }
+      : undefined,
+    lastLeckortungEmailDelivery: source.lastLeckortungEmailDelivery
+      ? {
+          ...source.lastLeckortungEmailDelivery,
+          sentAt: toIsoString(source.lastLeckortungEmailDelivery.sentAt)
         }
       : undefined
   };

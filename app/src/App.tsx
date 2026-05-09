@@ -5,12 +5,19 @@ import { auth, db } from "./firebase";
 import { LoginForm } from "./components/LoginForm";
 import { ReportList } from "./components/ReportList";
 import { ReportEditor } from "./components/ReportEditor";
-import { detectInitialLanguage, LANGUAGE_STORAGE_KEY, Language, translate } from "./i18n";
+import { LeckortungPage } from "./components/LeckortungPage";
+import { applyDocumentLanguage, createTranslator, detectInitialLanguage, Language, persistLanguagePreference, translate } from "./i18n";
 import { LanguageSwitch } from "./components/LanguageSwitch";
 import { useBranding } from "./lib/useBranding";
 import { UserRole } from "./types";
 
 type AccessStatus = "checking" | "allowed" | "missing_profile" | "wrong_role" | "inactive" | "error";
+
+/** Parse `#leckortung/<reportId>` from location.hash */
+const parseLeckortungHash = (hash: string): string | null => {
+  const m = hash.replace(/^#/, "").match(/^leckortung\/(.+)$/);
+  return m?.[1] ?? null;
+};
 
 const App = () => {
   const branding = useBranding();
@@ -22,24 +29,22 @@ const App = () => {
   const [accessStatus, setAccessStatus] = useState<AccessStatus>("checking");
   const [accessError, setAccessError] = useState("");
   const [userRole, setUserRole] = useState<UserRole | null>(null);
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const [locationHash, setLocationHash] = useState(() => window.location.hash);
+  const t = createTranslator(language);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setLoading(false);
     });
-
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     const online = () => setIsOnline(true);
     const offline = () => setIsOnline(false);
-
     window.addEventListener("online", online);
     window.addEventListener("offline", offline);
-
     return () => {
       window.removeEventListener("online", online);
       window.removeEventListener("offline", offline);
@@ -47,18 +52,16 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
-    } catch {
-      // Ignore localStorage write failures in restricted environments.
-    }
-
-    document.documentElement.lang = language;
+    persistLanguagePreference(language);
+    applyDocumentLanguage(language);
   }, [language]);
+
+  /* Track hash changes for Leckortung page routing */
+  useEffect(() => {
+    const onHashChange = () => setLocationHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -78,24 +81,18 @@ const App = () => {
         const profileSnapshot = await getDoc(doc(db, "users", user.uid));
 
         if (!profileSnapshot.exists()) {
-          if (!cancelled) {
-            setAccessStatus("missing_profile");
-          }
+          if (!cancelled) setAccessStatus("missing_profile");
           return;
         }
 
         const profile = profileSnapshot.data();
         if (!["technician", "admin", "office"].includes(String(profile.role ?? ""))) {
-          if (!cancelled) {
-            setAccessStatus("wrong_role");
-          }
+          if (!cancelled) setAccessStatus("wrong_role");
           return;
         }
 
         if (profile.active !== true) {
-          if (!cancelled) {
-            setAccessStatus("inactive");
-          }
+          if (!cancelled) setAccessStatus("inactive");
           return;
         }
 
@@ -107,23 +104,20 @@ const App = () => {
         if (!cancelled) {
           setAccessStatus("error");
           setAccessError(
-                error instanceof Error
-                  ? error.message
-                  : translate(
-                      language,
-                      "Berechtigungen konnten nicht geprueft werden.",
-                      "No se pudieron comprobar los permisos."
-                    )
+            error instanceof Error
+              ? error.message
+              : translate(
+                  language,
+                  "Berechtigungen konnten nicht geprueft werden.",
+                  "No se pudieron comprobar los permisos."
+                )
           );
         }
       }
     };
 
     void checkAccess();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [user, language]);
 
   if (loading || (user && accessStatus === "checking")) {
@@ -150,21 +144,18 @@ const App = () => {
           "Tu inicio de sesión es correcto, pero falta tu perfil técnico en Firestore (users/{uid}). Activa la cuenta con el script de provisión."
         );
       }
-
       if (accessStatus === "wrong_role") {
         return t(
           "Dein Benutzerprofil hat keine freigeschaltete Rolle ('technician', 'admin' oder 'office'). Bitte Rolle und Status in users/{uid} pruefen.",
           "Tu perfil no tiene un rol permitido ('technician', 'admin' u 'office'). Revisa rol y estado en users/{uid}."
         );
       }
-
       if (accessStatus === "inactive") {
         return t(
           "Dein Techniker-Profil ist vorhanden, aber nicht aktiv (active != true).",
           "Tu perfil técnico existe, pero no está activo (active != true)."
         );
       }
-
       return t(
         "Berechtigungen konnten nicht geprueft werden. Details unten.",
         "No se pudieron comprobar los permisos. Detalle abajo."
@@ -194,6 +185,20 @@ const App = () => {
     );
   }
 
+  /* ── Leckortung full-page (hash routing) ── */
+  const leckortungReportId = parseLeckortungHash(locationHash);
+  if (leckortungReportId) {
+    return (
+      <LeckortungPage
+        reportId={leckortungReportId}
+        isOnline={isOnline}
+        language={language}
+        onBack={() => { window.location.hash = ""; }}
+      />
+    );
+  }
+
+  /* ── Report editor ── */
   if (activeReportId) {
     return (
       <ReportEditor
@@ -207,6 +212,7 @@ const App = () => {
     );
   }
 
+  /* ── Main app ── */
   return (
     <ReportList
       uid={user.uid}

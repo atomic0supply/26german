@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  canFillLeckortungForReport,
+  canOpenLeckortungPdfForReport,
   canOpenPdfForReport,
+  canSendLeckortungEmail,
   canSendReportEmail,
   getClientReports,
   searchClients,
@@ -69,7 +72,27 @@ describe("customerWorkspace helpers", () => {
 
     expect(canOpenPdfForReport(finalized)).toBe(true);
     expect(canSendReportEmail(finalized, client)).toBe(true);
+    expect(canFillLeckortungForReport(finalized)).toBe(true);
     expect(canOpenPdfForReport(makeReport())).toBe(false);
     expect(canSendReportEmail(finalized, { ...client, email: "" })).toBe(false);
+  });
+
+  it("enables Leckortung preview and email only when the Leckortung PDF exists", () => {
+    const finalized = makeReport({
+      status: "finalized",
+      finalization: {
+        pdfUrl: "https://example.com/report.pdf",
+        finalizedAt: "2026-04-16T10:00:00.000Z"
+      },
+      leckortungFinalization: {
+        pdfUrl: "https://example.com/leckortung.pdf",
+        finalizedAt: "2026-04-16T11:00:00.000Z"
+      }
+    });
+
+    expect(canOpenLeckortungPdfForReport(finalized)).toBe(true);
+    expect(canSendLeckortungEmail(finalized, client)).toBe(true);
+    expect(canOpenLeckortungPdfForReport(makeReport())).toBe(false);
+    expect(canSendLeckortungEmail(finalized, { ...client, email: "" })).toBe(false);
   });
 });

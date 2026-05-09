@@ -48,6 +48,28 @@ suite("firestore rules", () => {
         status: "finalized",
         projectInfo: { projectNumber: "P-2", locationObject: "Objekt" }
       });
+      await setDoc(doc(db, "templates/template-published"), {
+        name: "Published Template",
+        brand: "AquaRADAR",
+        status: "published",
+        publishedVersionId: "v1"
+      });
+      await setDoc(doc(db, "templates/template-published/versions/v1"), {
+        templateId: "template-published",
+        status: "published",
+        fieldSchema: []
+      });
+      await setDoc(doc(db, "templates/template-draft"), {
+        name: "Draft Template",
+        brand: "AquaRADAR",
+        status: "draft",
+        latestDraftVersionId: "v2"
+      });
+      await setDoc(doc(db, "templates/template-draft/versions/v2"), {
+        templateId: "template-draft",
+        status: "draft",
+        fieldSchema: []
+      });
     });
   });
 
@@ -125,5 +147,28 @@ suite("firestore rules", () => {
     const db = ctx.firestore();
 
     await assertSucceeds(getDoc(doc(db, "reports/report-1")));
+  });
+
+  it("allows app users to read published templates", async () => {
+    const ctx = testEnv.authenticatedContext("tech-1");
+    const db = ctx.firestore();
+
+    await assertSucceeds(getDoc(doc(db, "templates/template-published")));
+    await assertSucceeds(getDoc(doc(db, "templates/template-published/versions/v1")));
+  });
+
+  it("denies technicians access to draft templates", async () => {
+    const ctx = testEnv.authenticatedContext("tech-1");
+    const db = ctx.firestore();
+
+    await assertFails(getDoc(doc(db, "templates/template-draft")));
+    await assertFails(getDoc(doc(db, "templates/template-draft/versions/v2")));
+  });
+
+  it("allows admins to update template documents", async () => {
+    const ctx = testEnv.authenticatedContext("admin-1");
+    const db = ctx.firestore();
+
+    await assertSucceeds(updateDoc(doc(db, "templates/template-draft"), { status: "draft" }));
   });
 });

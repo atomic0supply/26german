@@ -1,4 +1,4 @@
-import { Language, translate } from "../i18n";
+import { createTranslator, Language } from "../i18n";
 
 interface LanguageSwitchProps {
   language: Language;
@@ -6,7 +6,7 @@ interface LanguageSwitchProps {
 }
 
 export const LanguageSwitch = ({ language, onLanguageChange }: LanguageSwitchProps) => {
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
 
   return (
     <div className="language-switch" role="group" aria-label={t("Sprache", "Idioma")}>

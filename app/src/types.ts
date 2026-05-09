@@ -1,13 +1,13 @@
 export type ReportStatus = "draft" | "finalized";
 export type UserRole = "technician" | "admin" | "office";
-export type BuiltinTemplateId = "svt";
-export type TemplateId = "svt";
+export type BuiltinTemplateId = "svt" | "leckortung";
+export type TemplateId = string;
 export type TemplateFieldValue = string | boolean;
 export type TemplateFieldMap = Record<string, string | string[]>;
 export type TemplateImageFieldMap = Record<string, string | string[]>;
 export type TemplateStatus = "draft" | "published";
 export type TemplateFieldType = "text" | "textarea" | "checkbox" | "dropdown" | "image" | "signature";
-export type TemplateFieldSource = "dynamic" | "image" | "signature";
+export type TemplateFieldSource = "dynamic" | "image" | "signature" | "acroform";
 export type TemplateSchemaSource = "manual" | "ai" | "mixed";
 
 export type CompanyId =
@@ -43,7 +43,11 @@ export type ActionKey =
   | "rueckbau"
   | "schimmelbeseitigung"
   | "demontage"
-  | "folgetermin";
+  | "folgetermin"
+  | "hinweiseUndAbsprache"
+  | "infoAnAquaRadar"
+  | "sonstigesCheckbox"
+  | "abzustimmen";
 
 export interface ProjectInfo {
   projectNumber: string;
@@ -107,6 +111,7 @@ export interface Billing {
   from: string;
   to: string;
   workingTimeHours: string;
+  workDate?: string;
 }
 
 export interface Signature {
@@ -126,6 +131,12 @@ export interface FinalizationInfo {
   pdfVersion: number;
 }
 
+export interface EmailDeliveryInfo {
+  clientId: string;
+  recipient: string;
+  sentAt: string;
+}
+
 export interface TemplateFieldRect {
   x: number;
   y: number;
@@ -141,9 +152,13 @@ export interface TemplateFieldSchema {
   page: number;
   rect: TemplateFieldRect;
   required: boolean;
+  includeInForm: boolean;
   options: string[];
   defaultValue: string;
   helpText: string;
+  pdfFieldName: string;
+  pdfFieldType: string;
+  sortOrder: number;
   aiConfidence?: number;
   aiReason?: string;
   generatedByAi?: boolean;
@@ -169,6 +184,7 @@ export interface TemplateVersion {
   versionNumber: number;
   createdBy: string;
   createdAt: string;
+  pdfUrl?: string;
   publishedAt?: string;
   publishedBy?: string;
   status: TemplateStatus;
@@ -190,6 +206,7 @@ export interface SuggestTemplateSchemaResult {
 export interface ReportData {
   clientId: string;
   brandTemplateId: TemplateId;
+  templateVersionId?: string;
   companyId?: CompanyId;
   templateName?: string;
   projectInfo: ProjectInfo;
@@ -208,6 +225,9 @@ export interface ReportData {
   createdAt: string;
   updatedAt: string;
   finalization?: FinalizationInfo;
+  leckortungFinalization?: FinalizationInfo;
+  lastEmailDelivery?: EmailDeliveryInfo;
+  lastLeckortungEmailDelivery?: EmailDeliveryInfo;
 }
 
 export interface ClientData {
@@ -218,6 +238,10 @@ export interface ClientData {
   email: string;
   phone: string;
   location: string;
+  street?: string;
+  streetNumber?: string;
+  postalCode?: string;
+  city?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -228,9 +252,12 @@ export interface ReportListItem {
   createdBy: string;
   createdByEmail?: string;
   createdByLabel?: string;
+  createdAt?: string;
   projectNumber: string;
   objectLabel: string;
   clientId?: string;
+  brandTemplateId?: TemplateId;
+  templateVersionId?: string;
   appointmentDate?: string;
   visitDurationMinutes?: string;
   visitNotificationRecipient?: string;
@@ -245,6 +272,21 @@ export interface ReportListItem {
     finalizedAt?: string;
     pdfVersion?: number;
   };
+  leckortungFinalization?: {
+    pdfUrl?: string;
+    finalizedAt?: string;
+    pdfVersion?: number;
+  };
+  lastEmailDelivery?: {
+    clientId?: string;
+    recipient?: string;
+    sentAt?: string;
+  };
+  lastLeckortungEmailDelivery?: {
+    clientId?: string;
+    recipient?: string;
+    sentAt?: string;
+  };
 }
 
 export interface TemplateConfig {
@@ -252,6 +294,7 @@ export interface TemplateConfig {
   name: string;
   pdfTemplatePath: string;
   fieldMap: TemplateFieldMap;
+  optionalFieldMap?: TemplateFieldMap;
   imageFieldMap?: TemplateImageFieldMap;
   signatureField: string;
   requiredTemplateFields: string[];
@@ -263,7 +306,37 @@ export interface CompanyConfig {
   logoStoragePath: string;
 }
 
+export interface BrandingConfig {
+  companyName: string;
+  logoUrl: string;
+  primaryColor?: string;
+  faviconUrl?: string;
+}
+
 export interface FinalizeReportResult {
   pdfUrl: string;
   finalizedAt: string;
+}
+
+export type AiPromptPurpose = "photo_description" | "damage_summary" | "general";
+
+export interface AiConfig {
+  textModel: string;
+  visionModel: string;
+  hasKey?: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface AiPrompt {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  purpose: AiPromptPurpose;
+  isDefault: boolean;
+  isActive?: boolean;
+  version?: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }

@@ -1,5 +1,13 @@
 import { ReportData } from "./types";
 
+interface ValidationOptions {
+  requireSummary?: boolean;
+  requireSignature?: boolean;
+  requireProjectNumber?: boolean;
+  requireAppointmentDate?: boolean;
+  requireTechnicianName?: boolean;
+}
+
 const getValueByPath = (source: unknown, path: string): unknown =>
   path.split(".").reduce<unknown>((current, segment) => {
     if (!current || typeof current !== "object") {
@@ -9,26 +17,37 @@ const getValueByPath = (source: unknown, path: string): unknown =>
     return (current as Record<string, unknown>)[segment];
   }, source);
 
-export const validateReportForFinalize = (report: ReportData, requiredTemplateFields: string[] = []): string[] => {
+export const validateReportForFinalize = (
+  report: ReportData,
+  requiredTemplateFields: string[] = [],
+  options: ValidationOptions = {}
+): string[] => {
   const errors: string[] = [];
+  const {
+    requireSummary = true,
+    requireSignature = false,
+    requireProjectNumber = true,
+    requireAppointmentDate = true,
+    requireTechnicianName = true
+  } = options;
 
-  if (!report.projectInfo?.projectNumber?.trim()) {
+  if (requireProjectNumber && !report.projectInfo?.projectNumber?.trim()) {
     errors.push("Projektnummer ist erforderlich");
   }
 
-  if (!report.projectInfo?.appointmentDate?.trim()) {
+  if (requireAppointmentDate && !report.projectInfo?.appointmentDate?.trim()) {
     errors.push("Messtermin ist erforderlich");
   }
 
-  if (!report.projectInfo?.technicianName?.trim()) {
+  if (requireTechnicianName && !report.projectInfo?.technicianName?.trim()) {
     errors.push("Messtechniker ist erforderlich");
   }
 
-  if (!report.findings?.summary?.trim()) {
+  if (requireSummary && !report.findings?.summary?.trim()) {
     errors.push("Ergebnis der Überprüfung ist erforderlich");
   }
 
-  if (!report.signature?.storagePath?.trim()) {
+  if (requireSignature && !report.signature?.storagePath?.trim()) {
     errors.push("Techniker-Signatur ist erforderlich");
   }
 

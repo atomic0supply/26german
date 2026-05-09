@@ -85,3 +85,15 @@ export const canOpenPdfForReport = (report: ReportListItem) =>
 
 export const canSendReportEmail = (report: ReportListItem, client: ClientData | null) =>
   report.status === "finalized" && Boolean(report.clientId && client?.email?.trim());
+
+export const canFillLeckortungForReport = (report: ReportListItem) =>
+  report.status === "finalized" &&
+  Boolean(report.finalization?.pdfUrl) &&
+  !report.leckortungFinalization?.pdfUrl;
+
+export const canOpenLeckortungPdfForReport = (report: ReportListItem) =>
+  Boolean(report.leckortungFinalization?.pdfUrl);
+
+export const canSendLeckortungEmail = (report: ReportListItem, client: ClientData | null) =>
+  canOpenLeckortungPdfForReport(report) && Boolean(report.clientId && client?.email?.trim());
+

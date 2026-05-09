@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { User } from "firebase/auth";
-import { Language, translate } from "../../i18n";
+import { createTranslator, defaultUserLabel, Language } from "../../i18n";
 import { UserRole } from "../../types";
 import { PwaInstallPrompt } from "../PwaInstallPrompt";
 import { SidebarNavItem } from "./SidebarNav";
@@ -92,9 +92,9 @@ export const AppShell = ({
   children
 }: AppShellProps) => {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
-  const t = useMemo(() => (esValue: string, deValue: string) => translate(language, deValue, esValue), [language]);
-  const userLabel = user.displayName?.trim() || user.email?.trim() || "User";
-  const roleLabel = userRole === "admin" ? t("Admin", "Admin") : userRole === "office" ? t("Oficina", "Büro") : t("Técnico", "Techniker");
+  const t = useMemo(() => createTranslator(language), [language]);
+  const userLabel = user.displayName?.trim() || user.email?.trim() || defaultUserLabel(language);
+  const roleLabel = userRole === "admin" ? t("Admin", "Admin") : userRole === "office" ? t("Büro", "Oficina") : t("Techniker", "Técnico");
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -155,12 +155,12 @@ export const AppShell = ({
     <>
       <div className="app-rail__brand">
         {logoUrl && <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />}
-        <span className="app-rail__eyebrow">{t("CRM operativo", "Operatives CRM")}</span>
+        <span className="app-rail__eyebrow">{t("Operatives CRM", "CRM operativo")}</span>
         <h1>{brandTitle}</h1>
         {brandSubtitle && <p>{brandSubtitle}</p>}
       </div>
 
-      <nav className="app-rail__nav" aria-label={t("Navegación principal", "Hauptnavigation")}>
+      <nav className="app-rail__nav" aria-label={t("Hauptnavigation", "Navegación principal")}>
         {navItems.map((item) => (
           <button
             key={item.id}
@@ -184,10 +184,10 @@ export const AppShell = ({
         <div className="app-identity-card">
           <strong>{userLabel}</strong>
           <span>{roleLabel}</span>
-          <small>{isOnline ? t("Conectado", "Verbunden") : t("Sin conexión", "Offline")}</small>
+          <small>{isOnline ? t("Verbunden", "Conectado") : t("Offline", "Sin conexión")}</small>
         </div>
         <button type="button" className="ghost" onClick={() => void onLogout()}>
-          {t("Cerrar sesión", "Abmelden")}
+          {t("Abmelden", "Cerrar sesión")}
         </button>
       </div>
     </>
@@ -204,20 +204,20 @@ export const AppShell = ({
         <button
           type="button"
           className="app-drawer__backdrop"
-          aria-label={t("Cerrar menú", "Menü schließen")}
+          aria-label={t("Menü schließen", "Cerrar menú")}
           onClick={() => setIsMobileNavOpen(false)}
         />
         <aside
           id="app-mobile-nav"
           className="app-drawer__panel"
-          aria-label={t("Menú lateral", "Seitenmenü")}
+          aria-label={t("Seitenmenü", "Menú lateral")}
         >
           <div className="app-drawer__header">
-            <span>{t("Menú", "Menü")}</span>
+            <span>{t("Menü", "Menú")}</span>
             <button
               type="button"
               className="app-drawer__close"
-              aria-label={t("Cerrar menú", "Menü schließen")}
+              aria-label={t("Menü schließen", "Cerrar menú")}
               onClick={() => setIsMobileNavOpen(false)}
             >
               <span aria-hidden="true">×</span>
@@ -235,7 +235,7 @@ export const AppShell = ({
               className="app-stage__menu-button"
               aria-expanded={isMobileNavOpen}
               aria-controls="app-mobile-nav"
-              aria-label={t("Abrir menú", "Menü öffnen")}
+              aria-label={t("Menü öffnen", "Abrir menú")}
               onClick={() => setIsMobileNavOpen(true)}
             >
               <span aria-hidden="true">☰</span>
@@ -249,9 +249,9 @@ export const AppShell = ({
 
           <div className="app-stage__meta">
             <span className={isOnline ? "status-pill online" : "status-pill offline"}>
-              {isOnline ? t("Online", "Online") : t("Sin conexión", "Offline")}
+              {isOnline ? t("Online", "Online") : t("Offline", "Sin conexión")}
             </span>
-            <div className="language-switch" aria-label={t("Idioma", "Sprache")}>
+            <div className="language-switch" aria-label={t("Sprache", "Idioma")}>
               <button
                 type="button"
                 className={language === "de" ? "language-switch__item active" : "language-switch__item"}
@@ -274,9 +274,9 @@ export const AppShell = ({
 
         <PwaInstallPrompt language={language} />
 
-        <footer className="app-footer">© 2026 FormetaLabs. Todos los derechos reservados.</footer>
+        <footer className="app-footer">© 2026 FormetaLabs. {t("Alle Rechte vorbehalten.", "Todos los derechos reservados.")}</footer>
 
-        <nav className="app-bottom-nav" aria-label={t("Navegación móvil", "Mobile Navigation")}>
+        <nav className="app-bottom-nav" aria-label={t("Mobile Navigation", "Navegación móvil")}>
           {navItems.map((item) => (
             <button
               key={item.id}

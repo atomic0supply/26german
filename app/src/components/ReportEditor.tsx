@@ -25,10 +25,12 @@ import {
 } from "../constants";
 import { db, functions, storage } from "../firebase";
 import { Language, localeForLanguage, translate } from "../i18n";
+import { getCallableErrorMessage } from "../lib/callableErrors";
 import { normalizeReportData } from "../lib/firestore";
 import { validateReportForFinalize } from "../lib/validation";
 import { ClientData, CompanyId, FinalizeReportResult, ReportData, ReportPhoto } from "../types";
 import { PhotoAnnotation, PhotoAnnotatorLite } from "./PhotoAnnotatorLite";
+import { TemplateDrivenReportEditor } from "./TemplateDrivenReportEditor";
 import { ActionBar } from "./ui/ActionBar";
 import { EmptyState } from "./ui/EmptyState";
 import { ProgressStepper } from "./ui/ProgressStepper";
@@ -99,7 +101,7 @@ const getClientLabel = (client: ClientData) =>
   [getClientFullName(client), client.location, client.email].filter(Boolean).join(" · ");
 
 const getStepText = (step: StepId, language: Language) => {
-  const t = (deValue: string, esValue: string) => translate(language, deValue, esValue);
+  const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
   switch (step) {
     case "recipient":
       return t("Empresa", "Unternehmen");
@@ -133,6 +135,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const [previewLoading, setPreviewLoading] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [activePhotoSlot, setActivePhotoSlot] = useState<number>(1);
+  const [analyzingSlots, setAnalyzingSlots] = useState<Set<number>>(new Set());
+  const [photoAiError, setPhotoAiError] = useState<string>("");
   const previewBlobUrlRef = useRef("");
   const initializedRef = useRef(false);
   const lastPersistedFingerprintRef = useRef("");
@@ -384,6 +388,37 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
     });
   };
 
+  const handleAnalyzePhoto = async (slot: number) => {
+    const photo = report?.photos.find((item) => item.slot === slot);
+    if (!photo?.storagePath || !canMutateDraft || !isOnline) return;
+
+    setPhotoAiError("");
+    setAnalyzingSlots((prev) => new Set(prev).add(slot));
+    try {
+      const callable = httpsCallable<
+        { reportId: string; photoId: string; storagePath: string; slot: number; technicianNote?: string },
+        { description: string; model: string; generatedAt: string }
+      >(functions, "analyzeInspectionPhoto");
+      const result = await callable({
+        reportId,
+        photoId: photo.id,
+        storagePath: photo.storagePath,
+        slot,
+        technicianNote: photo.documentation || undefined
+      });
+      updatePhotoMeta(slot, "documentation", result.data.description);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPhotoAiError(t("Error al analizar la foto con IA.", "Fehler bei der KI-Analyse des Fotos.") + (msg ? ` (${msg})` : ""));
+    } finally {
+      setAnalyzingSlots((prev) => {
+        const next = new Set(prev);
+        next.delete(slot);
+        return next;
+      });
+    }
+  };
+
   const updateAnnotations = (slot: number, annotations: PhotoAnnotation[]) => {
     if (!canMutateDraft) {
       return;
@@ -432,7 +467,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         setPreviewUrl(objectUrl);
       }
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : t("No se pudo generar la vista previa.", "Vorschau konnte nicht erzeugt werden."));
+      setError(getCallableErrorMessage(previewError, t("No se pudo generar la vista previa.", "Vorschau konnte nicht erzeugt werden.")));
     } finally {
       setPreviewLoading(false);
     }
@@ -448,7 +483,12 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       return;
     }
 
-    const errors = validateReportForFinalize(persisted, REPORT_TEMPLATE.requiredTemplateFields, language);
+    const errors = validateReportForFinalize(
+      persisted,
+      REPORT_TEMPLATE.requiredTemplateFields,
+      language,
+      { requireSignature: false }
+    );
     if (errors.length > 0) {
       setError(errors.join(" "));
       return;
@@ -467,7 +507,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       );
       setPreviewUrl(result.data.pdfUrl);
     } catch (finalizeError) {
-      setError(finalizeError instanceof Error ? finalizeError.message : t("No se pudo finalizar.", "Finalisierung fehlgeschlagen."));
+      setError(getCallableErrorMessage(finalizeError, t("No se pudo finalizar.", "Finalisierung fehlgeschlagen.")));
     } finally {
       setSaving(false);
     }
@@ -490,14 +530,14 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       const result = await callable({ reportId, clientId: report.clientId });
       setNotice(t(`PDF enviado a ${result.data.recipient}.`, `PDF gesendet an ${result.data.recipient}.`));
     } catch (emailError) {
-      setError(emailError instanceof Error ? emailError.message : t("No se pudo enviar el correo.", "E-Mail konnte nicht gesendet werden."));
+      setError(getCallableErrorMessage(emailError, t("No se pudo enviar el correo.", "E-Mail konnte nicht gesendet werden.")));
     } finally {
       setSaving(false);
     }
   };
 
   const validationErrors = report
-    ? validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, language)
+    ? validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, language, { requireSignature: false })
     : [];
   const selectedClient = report ? clients.find((client) => client.id === report.clientId) ?? null : null;
 
@@ -508,11 +548,11 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
 
     switch (step) {
       case "recipient":
-        return Boolean(report.companyId);
+        return true;
       case "client":
         return Boolean(report.clientId) && Boolean(report.projectInfo.locationObject.trim());
       case "technical":
-        return Boolean(report.projectInfo.projectNumber.trim() && report.projectInfo.technicianName.trim() && report.findings.summary.trim());
+        return Boolean(report.projectInfo.projectNumber.trim() && report.projectInfo.technicianName.trim());
       case "photos":
         return report.photos.length > 0;
       case "review":
@@ -575,6 +615,19 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
           <button type="button" onClick={onBack}>{t("Volver", "Zurück")}</button>
         </SectionCard>
       </main>
+    );
+  }
+
+  if (!["svt", "leckortung"].includes(report.brandTemplateId)) {
+    return (
+      <TemplateDrivenReportEditor
+        reportId={reportId}
+        uid={uid}
+        userRole={userRole}
+        isOnline={isOnline}
+        language={language}
+        onBack={onBack}
+      />
     );
   }
 
@@ -657,7 +710,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
             <SectionCard
               title={t("Empresa destinataria", "Zielunternehmen")}
               eyebrow={t("Paso 1", "Schritt 1")}
-              description={t("Elige la marca que debe aparecer en la parte superior del PDF.", "Wähle die Marke, die oben im PDF erscheinen soll.")}
+              description={t("Si quieres, elige la marca que debe aparecer en la parte superior del PDF.", "Optional kann hier die Marke gewählt werden, die oben im PDF erscheinen soll.")}
             >
               <div className="company-grid">
                 {COMPANY_OPTIONS.map((company) => (
@@ -710,7 +763,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                             contacts: selected
                               ? {
                                   ...previous.contacts,
-                                  name1: selected.principalContact,
+                                  name1: [selected.name, selected.surname].filter(Boolean).join(" ") || selected.principalContact,
                                   email: selected.email,
                                   phone1: selected.phone,
                                   street1: selected.location
@@ -765,7 +818,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                     <label>
                       {t("Contacto principal", "Hauptkontakt")}
                       <input
-                        className={selectedClient && report.contacts.name1 === selectedClient.principalContact ? "field-autofilled" : undefined}
+                        className={selectedClient && report.contacts.name1 === ([selectedClient.name, selectedClient.surname].filter(Boolean).join(" ") || selectedClient.principalContact) ? "field-autofilled" : undefined}
                         value={report.contacts.name1}
                         disabled={!canMutateDraft}
                         onChange={(event) =>
@@ -826,6 +879,90 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                               ...previous.contacts,
                               street1: event.target.value
                             }
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="form-panel">
+                  <span className="form-panel__eyebrow">{t("Lugar de medición / Objeto", "Messort / Objekt")}</span>
+                  <div className="grid two">
+                    <label>
+                      {t("Nombre", "Name")}
+                      <input
+                        value={report.contacts.name2}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: { ...previous.contacts, name2: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Dirección", "Straße")}
+                      <input
+                        value={report.contacts.street2}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: { ...previous.contacts, street2: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Localidad", "Ort")}
+                      <input
+                        value={report.contacts.city2}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: { ...previous.contacts, city2: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Teléfono", "Telefon")}
+                      <input
+                        value={report.contacts.phone2}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: { ...previous.contacts, phone2: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Móvil", "Mobil")}
+                      <input
+                        value={report.contacts.mobile2}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: { ...previous.contacts, mobile2: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Véase cliente", "Siehe Kunde")}
+                      <input
+                        value={report.actions.coordinateWith}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            actions: { ...previous.actions, coordinateWith: event.target.value }
                           }))
                         }
                       />
@@ -918,44 +1055,9 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                         }
                       />
                     </label>
-                    <label>
-                      {t("Primer aviso por", "Erstmeldung durch")}
-                      <input
-                        value={report.projectInfo.firstReportBy}
-                        disabled={!canMutateDraft}
-                        onChange={(event) =>
-                          updateReport((previous) => ({
-                            ...previous,
-                            projectInfo: {
-                              ...previous.projectInfo,
-                              firstReportBy: event.target.value
-                            }
-                          }))
-                        }
-                      />
-                    </label>
                   </div>
                 </div>
 
-                <div className="form-panel">
-                  <span className="form-panel__eyebrow">{t("Resumen de intervención", "Einsatzresümee")}</span>
-                  <label>
-                    {t("Resultado / resumen", "Ergebnis / Zusammenfassung")}
-                    <textarea
-                      value={report.findings.summary}
-                      disabled={!canMutateDraft}
-                      onChange={(event) =>
-                        updateReport((previous) => ({
-                          ...previous,
-                          findings: {
-                            ...previous.findings,
-                            summary: event.target.value
-                          }
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
               </div>
 
               <div className="grid two">
@@ -988,7 +1090,197 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                 </div>
 
                 <div className="checklist-panel">
-                  <strong>{t("Técnicas usadas", "Verfahren")}</strong>
+                  <strong>{t("Asistentes", "Anwesende")}</strong>
+                  <div className="checkbox-grid">
+                    {ATTENDEE_OPTIONS.map((option) => (
+                      <label key={option.key} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={report.attendees.flags[option.key]}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              attendees: {
+                                ...previous.attendees,
+                                flags: {
+                                  ...previous.attendees.flags,
+                                  [option.key]: event.target.checked
+                                }
+                              }
+                            }))
+                          }
+                        />
+                        {getLocalizedOptionLabel(language, option)}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="checklist-panel">
+                <strong>{t("Resultado de la revisión", "Ergebnis der Überprüfung")}</strong>
+                <div className="checkbox-grid">
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.findings.causeFound === true}
+                      disabled={!canMutateDraft}
+                      onChange={() =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, causeFound: true }
+                        }))
+                      }
+                    />
+                    {t("Sí", "Ja")}
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.findings.causeFound === false}
+                      disabled={!canMutateDraft}
+                      onChange={() =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, causeFound: false }
+                        }))
+                      }
+                    />
+                    {t("No", "Nein")}
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.findings.causeExposed}
+                      disabled={!canMutateDraft}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, causeExposed: event.target.checked }
+                        }))
+                      }
+                    />
+                    {t("Causa expuesta", "Ursache freigelegt")}
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.findings.temporarySeal}
+                      disabled={!canMutateDraft}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, temporarySeal: event.target.checked }
+                        }))
+                      }
+                    />
+                    {t("Sellado provisional", "Notabdichtung")}
+                  </label>
+                </div>
+              </div>
+
+              <div className="grid two">
+                <div className="checklist-panel">
+                  <strong>{t("Acciones y seguimiento", "Weiteres")}</strong>
+                  <div className="checkbox-grid">
+                    {ACTION_OPTIONS.filter((option) => option.key !== "sonstigesCheckbox" && option.key !== "abzustimmen").map((option) => (
+                      <label key={option.key} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={report.actions.flags[option.key]}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              actions: {
+                                ...previous.actions,
+                                flags: {
+                                  ...previous.actions.flags,
+                                  [option.key]: event.target.checked
+                                }
+                              }
+                            }))
+                          }
+                        />
+                        {getLocalizedOptionLabel(language, option)}
+                      </label>
+                    ))}
+                  </div>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.actions.flags.abzustimmen}
+                      disabled={!canMutateDraft}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          actions: {
+                            ...previous.actions,
+                            flags: { ...previous.actions.flags, abzustimmen: event.target.checked }
+                          }
+                        }))
+                      }
+                    />
+                    {t("Por coordinar", "Abzustimmen")}
+                  </label>
+                  {report.actions.flags.abzustimmen && (
+                    <label>
+                      {t("Detalles de coordinación", "Abstimmungsdetails")}
+                      <input
+                        value={String(report.templateFields.abzustimmenText ?? "")}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            templateFields: {
+                              ...previous.templateFields,
+                              abzustimmenText: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={report.actions.flags.sonstigesCheckbox}
+                      disabled={!canMutateDraft}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          actions: {
+                            ...previous.actions,
+                            flags: { ...previous.actions.flags, sonstigesCheckbox: event.target.checked }
+                          }
+                        }))
+                      }
+                    />
+                    {t("Otros", "Sonstiges")}
+                  </label>
+                  {report.actions.flags.sonstigesCheckbox && (
+                    <label>
+                      {t("Detalles", "Details")}
+                      <textarea
+                        value={String(report.templateFields.sonstiges ?? "")}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            templateFields: {
+                              ...previous.templateFields,
+                              sonstiges: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="checklist-panel">
+                  <strong>{t("Técnicas empleadas", "Eingesetzte Verfahren")}</strong>
                   <div className="checkbox-grid">
                     {TECHNIQUE_OPTIONS.map((option) => (
                       <label key={option.value} className="checkbox">
@@ -1012,31 +1304,53 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                 </div>
               </div>
 
-              <div className="checklist-panel">
-                <strong>{t("Acciones y seguimiento", "Maßnahmen und Folgearbeiten")}</strong>
-                <div className="checkbox-grid">
-                  {ACTION_OPTIONS.map((option) => (
-                    <label key={option.key} className="checkbox">
+              <div className="form-panel-grid">
+                <div className="form-panel form-panel__full">
+                  <span className="form-panel__eyebrow">{t("Abrechnung", "Abrechnung")}</span>
+                  <div className="grid two">
+                    <label>
+                      {t("Abrechnung desde", "Abrechnung von")}
                       <input
-                        type="checkbox"
-                        checked={report.actions.flags[option.key]}
+                        type="time"
+                        value={report.billing.from}
                         disabled={!canMutateDraft}
                         onChange={(event) =>
                           updateReport((previous) => ({
                             ...previous,
-                            actions: {
-                              ...previous.actions,
-                              flags: {
-                                ...previous.actions.flags,
-                                [option.key]: event.target.checked
-                              }
-                            }
+                            billing: { ...previous.billing, from: event.target.value }
                           }))
                         }
                       />
-                      {getLocalizedOptionLabel(language, option)}
                     </label>
-                  ))}
+                    <label>
+                      {t("Abrechnung hasta", "Abrechnung bis")}
+                      <input
+                        type="time"
+                        value={report.billing.to}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            billing: { ...previous.billing, to: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Arbeitszeit", "Arbeitszeit")}
+                      <input
+                        type="date"
+                        value={report.billing.workDate ?? ""}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            billing: { ...previous.billing, workDate: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
                 </div>
               </div>
             </SectionCard>
@@ -1112,6 +1426,22 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       />
                     </label>
                   </div>
+                  {report.brandTemplateId !== "leckortung" && (
+                    <div className="photo-ai-row">
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={!activePhoto?.documentation?.trim() || !canMutateDraft || !isOnline || analyzingSlots.has(activePhotoSlot)}
+                        title={!activePhoto?.documentation?.trim() ? t("Escribe primero una observación para que la IA la mejore", "Schreibe zuerst eine Beobachtung, damit die KI sie verbessern kann") : undefined}
+                        onClick={() => void handleAnalyzePhoto(activePhotoSlot)}
+                      >
+                        {analyzingSlots.has(activePhotoSlot)
+                          ? t("Mejorando texto...", "Text wird verbessert...")
+                          : t("✨ Mejorar con IA", "✨ Mit KI verbessern")}
+                      </button>
+                      {photoAiError && <small className="field-error">{photoAiError}</small>}
+                    </div>
+                  )}
                   {activePhoto?.downloadUrl ? (
                     <PhotoAnnotatorLite
                       imageUrl={activePhoto.downloadUrl}

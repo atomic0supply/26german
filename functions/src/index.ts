@@ -68,6 +68,8 @@ type Mailer = {
 
 type EmailTemplateConfig = {
   emailSignature: string;
+  signatureLogoUrl: string;
+  signatureLogoPosition: "above" | "below" | "left" | "right";
   appointmentEmailSubject: string;
   appointmentEmailBody: string;
   reportEmailSubject: string;
@@ -122,6 +124,10 @@ const DEFAULT_LECKORTUNG_EMAIL_BODY = [
 
 const getEmailTemplateConfig = (data?: Record<string, unknown> | null): EmailTemplateConfig => ({
   emailSignature: String(data?.emailSignature ?? DEFAULT_EMAIL_SIGNATURE),
+  signatureLogoUrl: String(data?.signatureLogoUrl ?? ""),
+  signatureLogoPosition: (["above", "below", "left", "right"].includes(String(data?.signatureLogoPosition))
+    ? String(data?.signatureLogoPosition)
+    : "below") as "above" | "below" | "left" | "right",
   appointmentEmailSubject: String(data?.appointmentEmailSubject ?? DEFAULT_APPOINTMENT_EMAIL_SUBJECT),
   appointmentEmailBody: String(data?.appointmentEmailBody ?? DEFAULT_APPOINTMENT_EMAIL_BODY),
   reportEmailSubject: String(data?.reportEmailSubject ?? DEFAULT_REPORT_EMAIL_SUBJECT),
@@ -129,6 +135,58 @@ const getEmailTemplateConfig = (data?: Record<string, unknown> | null): EmailTem
   leckortungEmailSubject: String(data?.leckortungEmailSubject ?? DEFAULT_LECKORTUNG_EMAIL_SUBJECT),
   leckortungEmailBody: String(data?.leckortungEmailBody ?? DEFAULT_LECKORTUNG_EMAIL_BODY),
 });
+
+/**
+ * Builds an HTML version of the email body for clients that support it.
+ * The plain-text body is still sent in the `text` field as a fallback.
+ */
+const buildHtmlEmail = (body: string, signatureLogoUrl?: string, logoPosition?: string): string => {
+  const escapeHtml = (value: string) =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  const bodyHtml = escapeHtml(body)
+    .split("\n")
+    .map((line) => (line.trim() === "" ? "<br>" : `<p style="margin:0 0 4px">${line}</p>`))
+    .join("\n");
+
+  const logoUrl = signatureLogoUrl?.trim();
+  if (!logoUrl) {
+    return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;max-width:600px">
+${bodyHtml}
+</body></html>`;
+  }
+
+  const logoImg = `<img src="${escapeHtml(logoUrl)}" alt="Logo" style="max-height:72px;max-width:200px;object-fit:contain;display:block" />`;
+
+  let signatureBlock: string;
+  switch (logoPosition) {
+    case "above":
+      signatureBlock = `<div style="margin-top:24px">${logoImg}<div style="margin-top:10px">${bodyHtml}</div></div>`;
+      break;
+    case "left":
+      signatureBlock = `<table style="margin-top:24px;border-collapse:collapse"><tr>
+        <td style="vertical-align:top;padding-right:16px">${logoImg}</td>
+        <td style="vertical-align:top">${bodyHtml}</td>
+      </tr></table>`;
+      break;
+    case "right":
+      signatureBlock = `<table style="margin-top:24px;border-collapse:collapse"><tr>
+        <td style="vertical-align:top;padding-right:16px">${bodyHtml}</td>
+        <td style="vertical-align:top">${logoImg}</td>
+      </tr></table>`;
+      break;
+    default: // "below"
+      signatureBlock = `<div style="margin-top:24px">${bodyHtml}<div style="margin-top:12px">${logoImg}</div></div>`;
+  }
+
+  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;max-width:600px">
+${signatureBlock}
+</body></html>`;
+};
 
 const fillTemplate = (template: string, values: Record<string, string>) =>
   template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key: string) => values[key] ?? "");
@@ -453,7 +511,7 @@ export const finalizeReport = onCall({ cors: true }, async (request) => {
           requireTechnicianName: false,
           requireSignature: false
         }
-      : { requireSignature: false };
+      : { requireSignature: false, requireSummary: false };
   } else {
     const dynInputs = buildDynamicValidationInputs(renderContext.version);
     validationRequiredFields = dynInputs.requiredTemplateFields;
@@ -662,6 +720,7 @@ export const sendReportEmail = onCall({ cors: true }, async (request) => {
       to: client.email,
       subject,
       text,
+      html: buildHtmlEmail(text, templateConfig.signatureLogoUrl, templateConfig.signatureLogoPosition),
       attachments: [
         {
           filename,
@@ -765,12 +824,14 @@ export const sendLeckortungEmail = onCall({ cors: true }, async (request) => {
   const emailConfig = getEmailTemplateConfig(smtpSnap.exists ? (smtpSnap.data() as Record<string, unknown>) : null);
   tokens.signature = fillTemplate(emailConfig.emailSignature, tokens);
 
+  const emailText = fillTemplate(emailConfig.leckortungEmailBody, tokens);
   try {
     await mailer.transporter.sendMail({
       from: mailer.from,
       to: client.email,
       subject: fillTemplate(emailConfig.leckortungEmailSubject, tokens),
-      text: fillTemplate(emailConfig.leckortungEmailBody, tokens),
+      text: emailText,
+      html: buildHtmlEmail(emailText, emailConfig.signatureLogoUrl, emailConfig.signatureLogoPosition),
       attachments: [
         {
           filename,
@@ -871,11 +932,13 @@ export const sendVisitNotification = onCall({ cors: true }, async (request) => {
   const emailConfig = getEmailTemplateConfig(smtpSnap.exists ? (smtpSnap.data() as Record<string, unknown>) : null);
   tokens.signature = fillTemplate(emailConfig.emailSignature, tokens);
 
+  const emailText = fillTemplate(emailConfig.appointmentEmailBody, tokens).trim() || fillTemplate(DEFAULT_APPOINTMENT_EMAIL_BODY, tokens);
   await mailer.transporter.sendMail({
     from: mailer.from,
     to: client.email,
     subject: fillTemplate(emailConfig.appointmentEmailSubject, tokens).trim() || fillTemplate(DEFAULT_APPOINTMENT_EMAIL_SUBJECT, tokens),
-    text: fillTemplate(emailConfig.appointmentEmailBody, tokens).trim() || fillTemplate(DEFAULT_APPOINTMENT_EMAIL_BODY, tokens)
+    text: emailText,
+    html: buildHtmlEmail(emailText, emailConfig.signatureLogoUrl, emailConfig.signatureLogoPosition)
   });
 
   await reportRef.update({
@@ -1037,13 +1100,15 @@ export const saveSmtpConfig = onCall({ cors: true }, async (request) => {
   if (!uid) throw new HttpsError("unauthenticated", "UNAUTHORIZED");
   await assertAdmin(uid);
 
-  const { host, port, user, pass, from, emailSignature, appointmentEmailSubject, appointmentEmailBody, reportEmailSubject, reportEmailBody, leckortungEmailSubject, leckortungEmailBody } = request.data as {
+  const { host, port, user, pass, from, emailSignature, signatureLogoUrl, signatureLogoPosition, appointmentEmailSubject, appointmentEmailBody, reportEmailSubject, reportEmailBody, leckortungEmailSubject, leckortungEmailBody } = request.data as {
     host: string;
     port: number;
     user: string;
     pass?: string;
     from?: string;
     emailSignature?: string;
+    signatureLogoUrl?: string;
+    signatureLogoPosition?: string;
     appointmentEmailSubject?: string;
     appointmentEmailBody?: string;
     reportEmailSubject?: string;
@@ -1065,6 +1130,8 @@ export const saveSmtpConfig = onCall({ cors: true }, async (request) => {
     user,
     from: from || user,
     emailSignature: String(emailSignature ?? DEFAULT_EMAIL_SIGNATURE),
+    signatureLogoUrl: String(signatureLogoUrl ?? ""),
+    signatureLogoPosition: String(signatureLogoPosition ?? "below"),
     appointmentEmailSubject: String(appointmentEmailSubject ?? DEFAULT_APPOINTMENT_EMAIL_SUBJECT),
     appointmentEmailBody: String(appointmentEmailBody ?? DEFAULT_APPOINTMENT_EMAIL_BODY),
     reportEmailSubject: String(reportEmailSubject ?? DEFAULT_REPORT_EMAIL_SUBJECT),
@@ -1129,12 +1196,17 @@ export const sendTestEmail = onCall({ cors: true }, async (request) => {
   const finalSubject = fillTemplate(subject || "Test Email", tokens);
   const finalBody = fillTemplate(body || "This is a test email.", tokens);
 
+  // Fetch logo URL for the test email preview
+  const smtpSnap = await db.doc("config/smtp").get();
+  const emailConfig = getEmailTemplateConfig(smtpSnap.exists ? (smtpSnap.data() as Record<string, unknown>) : null);
+
   try {
     await mailer.transporter.sendMail({
       from: mailer.from,
       to: recipientEmail,
       subject: finalSubject,
-      text: finalBody
+      text: finalBody,
+      html: buildHtmlEmail(finalBody, emailConfig.signatureLogoUrl, emailConfig.signatureLogoPosition)
     });
   } catch (smtpErr) {
     const msg = smtpErr instanceof Error ? smtpErr.message : String(smtpErr);

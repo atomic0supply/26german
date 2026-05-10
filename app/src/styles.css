@@ -4466,3 +4466,27 @@ button.ghost.small.danger:hover {
   white-space: pre-wrap;
   word-wrap: break-word;
 }
+
+/* ── Signature logo upload block ─────────────────────────────── */
+.smtp-logo-signature-block {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.smtp-logo-dropzone {
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.smtp-logo-dropzone:hover {
+  border-color: var(--primary) !important;
+  background: color-mix(in srgb, var(--primary) 5%, #f9fafb) !important;
+}
+
+.smtp-logo-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}

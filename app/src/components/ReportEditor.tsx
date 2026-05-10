@@ -487,7 +487,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       persisted,
       REPORT_TEMPLATE.requiredTemplateFields,
       language,
-      { requireSignature: false }
+      { requireSignature: false, requireSummary: false }
     );
     if (errors.length > 0) {
       setError(errors.join(" "));
@@ -537,7 +537,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   };
 
   const validationErrors = report
-    ? validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, language, { requireSignature: false })
+    ? validateReportForFinalize(report, REPORT_TEMPLATE.requiredTemplateFields, language, { requireSignature: false, requireSummary: false })
     : [];
   const selectedClient = report ? clients.find((client) => client.id === report.clientId) ?? null : null;
 

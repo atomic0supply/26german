@@ -56,7 +56,7 @@ service firebase.storage {
       allow read: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin());
       // Write allowed on any status because the client uploads the signature BEFORE
       // the Cloud Function resets the report to draft for re-finalization.
-      allow write: if isAppUser() && ownsReport(reportId) && fileName == 'customer.png';
+      allow write: if isAppUser() && (ownsReport(reportId) || isOfficeOrAdmin()) && fileName == 'customer.png';
     }
 
     match /report-pdfs/{reportId}/{fileName} {

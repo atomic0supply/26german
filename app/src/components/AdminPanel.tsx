@@ -52,6 +52,7 @@ interface SmtpConfig {
   from: string;
   hasPass: boolean;
   emailSignature: string;
+  signatureLogoUrl: string;
   appointmentEmailSubject: string;
   appointmentEmailBody: string;
   reportEmailSubject: string;
@@ -217,6 +218,7 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
     from: "",
     hasPass: false,
     emailSignature: "",
+    signatureLogoUrl: "",
     appointmentEmailSubject: "",
     appointmentEmailBody: "",
     reportEmailSubject: "",
@@ -228,6 +230,8 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
   const [smtpPass, setSmtpPass] = useState("");
   const [savingSmtp, setSavingSmtp] = useState(false);
   const [smtpTab, setSmtpTab] = useState<"templates" | "config">("templates");
+  const [signatureLogoFile, setSignatureLogoFile] = useState<File | null>(null);
+  const [signatureLogoPreview, setSignatureLogoPreview] = useState<string>("");
   const [expandedTemplate, setExpandedTemplate] = useState<"appointment" | "report" | "leckortung" | null>(null);
   const [sendingTestEmail, setSendingTestEmail] = useState(false);
   const [testEmailResult, setTestEmailResult] = useState<{ success: boolean; msg: string } | null>(null);
@@ -396,6 +400,8 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
       const fn = httpsCallable<unknown, SmtpConfig>(functions, "getSmtpConfig");
       const res = await fn({});
       setSmtp(res.data);
+      setSignatureLogoPreview(res.data.signatureLogoUrl || "");
+      setSignatureLogoFile(null);
     } catch (err) {
       handleError(err);
     } finally {
@@ -482,6 +488,13 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
     setFaviconPreviewUrl(previewUrl);
     return () => URL.revokeObjectURL(previewUrl);
   }, [faviconFile]);
+
+  useEffect(() => {
+    if (!signatureLogoFile) return;
+    const previewUrl = URL.createObjectURL(signatureLogoFile);
+    setSignatureLogoPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [signatureLogoFile]);
 
   // ── Load users when page is active ─────────────────────────────────────────
   useEffect(() => {
@@ -593,6 +606,16 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
     setSavingSmtp(true);
     setError("");
     try {
+      let nextSignatureLogoUrl = smtp.signatureLogoUrl;
+
+      if (signatureLogoFile) {
+        const storageRef = ref(storage, "branding/signature-logo");
+        await uploadBytes(storageRef, signatureLogoFile, signatureLogoFile.type ? { contentType: signatureLogoFile.type } : undefined);
+        nextSignatureLogoUrl = await getDownloadURL(storageRef);
+        setSmtp((prev) => ({ ...prev, signatureLogoUrl: nextSignatureLogoUrl }));
+        setSignatureLogoFile(null);
+      }
+
       const fn = httpsCallable(functions, "saveSmtpConfig");
       await fn({
         host: smtp.host,
@@ -601,6 +624,7 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
         from: smtp.from,
         pass: smtpPass || undefined,
         emailSignature: smtp.emailSignature,
+        signatureLogoUrl: nextSignatureLogoUrl,
         appointmentEmailSubject: smtp.appointmentEmailSubject,
         appointmentEmailBody: smtp.appointmentEmailBody,
         reportEmailSubject: smtp.reportEmailSubject,
@@ -1192,7 +1216,7 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
                   </div>
 
                   <div className="stack">
-                    <label className="smtp-label" style={{ marginBottom: "16px" }}>
+                    <label className="smtp-label" style={{ marginBottom: "8px" }}>
                       {t("Globale E-Mail-Signatur", "Firma global de correo")}
                       <textarea
                         className="smtp-textarea"
@@ -1205,6 +1229,72 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
                         {t("Wird an jede gesendete E-Mail angehängt.", "Se añade automáticamente al final de cada correo si usas la variable {{signature}}.")}
                       </small>
                     </label>
+
+                    <div className="smtp-logo-signature-block">
+                      <span className="smtp-label" style={{ display: "block", marginBottom: "8px", fontWeight: 600 }}>
+                        {t("Unternehmenslogo in der Signatur", "Logo de empresa en la firma")}
+                      </span>
+
+                      {signatureLogoPreview ? (
+                        <div className="smtp-logo-preview">
+                          <img
+                            src={signatureLogoPreview}
+                            alt={t("Logo-Vorschau", "Vista previa del logo")}
+                            style={{ maxHeight: "80px", maxWidth: "240px", objectFit: "contain", borderRadius: "6px", border: "1px solid var(--border-subtle, #e5e7eb)", padding: "6px", background: "#fff" }}
+                          />
+                          <div style={{ display: "flex", gap: "8px", marginTop: "8px", alignItems: "center" }}>
+                            <label className="ghost small" style={{ cursor: "pointer", display: "inline-block" }}>
+                              {t("Ändern", "Cambiar")}
+                              <input
+                                type="file"
+                                accept="image/png,image/svg+xml,image/webp,image/jpeg"
+                                style={{ display: "none" }}
+                                onChange={(event) => setSignatureLogoFile(event.target.files?.[0] ?? null)}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="ghost small danger"
+                              onClick={() => {
+                                setSignatureLogoFile(null);
+                                setSignatureLogoPreview("");
+                                setSmtp((prev) => ({ ...prev, signatureLogoUrl: "" }));
+                              }}
+                            >
+                              {t("Entfernen", "Eliminar logo")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <label style={{ cursor: "pointer", display: "inline-block" }}>
+                          <div
+                            className="smtp-logo-dropzone"
+                            style={{
+                              border: "2px dashed var(--border-subtle, #d1d5db)",
+                              borderRadius: "10px",
+                              padding: "20px 28px",
+                              textAlign: "center",
+                              color: "var(--ink-muted)",
+                              fontSize: "13px",
+                              background: "var(--surface-secondary, #f9fafb)",
+                              transition: "border-color 0.2s"
+                            }}
+                          >
+                            <div style={{ fontSize: "24px", marginBottom: "4px" }}>🖼️</div>
+                            <div>{t("Logo hochladen (PNG / SVG / WebP / JPG)", "Subir logo (PNG / SVG / WebP / JPG)")}</div>
+                            <div style={{ fontSize: "11px", marginTop: "4px", opacity: 0.7 }}>
+                              {t("Erscheint im unteren Bereich der E-Mail-Signatur", "Aparecerá en la parte inferior de la firma del correo")}
+                            </div>
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/png,image/svg+xml,image/webp,image/jpeg"
+                            style={{ display: "none" }}
+                            onChange={(event) => setSignatureLogoFile(event.target.files?.[0] ?? null)}
+                          />
+                        </label>
+                      )}
+                    </div>
                   </div>
 
                   <SmtpTemplateEditor

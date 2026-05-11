@@ -10,7 +10,7 @@ const FIELD_MAP: TemplateFieldMap = {
   "projectInfo.appointmentDate":   "messtermin",
   "projectInfo.technicianName":    "Messtechniker",
   "projectInfo.locationObject":    "MessortObjekt_name",
-  "projectInfo.auftragserteilung": "Auftragserteilung",
+  // NOTA: "Auftragserteilung" NO existe en template-prok15.pdf → se añade solo en FIELD_MAP_ALL
 
   // Kunde (lado izquierdo del PDF) = Partner / Firma colaboradora
   // ⚠️ kunde* ya NO contiene los datos del cliente final; corresponde al Partner seleccionado en el informe.
@@ -78,7 +78,9 @@ const FIELD_MAP: TemplateFieldMap = {
 // Plantillas AcroForm (selección dinámica según Auftragserteilung)
 // ---------------------------------------------------------------------------
 const FIELD_MAP_ALL: TemplateFieldMap = {
-  ...FIELD_MAP
+  ...FIELD_MAP,
+  // Este campo solo existe en template-all15.pdf (no en prok15)
+  "projectInfo.auftragserteilung": "Auftragserteilung",
 };
 
 const OPTIONAL_FIELD_MAP: TemplateFieldMap = {
@@ -86,7 +88,12 @@ const OPTIONAL_FIELD_MAP: TemplateFieldMap = {
   "templateFields.abzustimmenText": "Weiteres_Abzustimmen_mit_text",
   "billing.from":                "Abrechnung_Arbeitszeit_von",
   "billing.to":                  "Abrechnung_Arbeitszeit_bis",
-  "billing.workDate":            "Abrechnung_Arbeitszeit_1_date"
+  "billing.workDate":            "Abrechnung_Arbeitszeit_1_date",
+  // Segundo técnico (opcional): los campos AcroForm Abrechnung_Arbeitszeit_2_*
+  // los crea programáticamente `ensureExtraArbeitszeitRow` antes del relleno.
+  "billing.from2":               "Abrechnung_Arbeitszeit_2_von",
+  "billing.to2":                 "Abrechnung_Arbeitszeit_2_bis",
+  "billing.workDate2":           "Abrechnung_Arbeitszeit_2_date"
 };
 
 export const REPORT_TEMPLATE_PROK: TemplateConfig = {
@@ -165,6 +172,19 @@ export const getCompany = (id: CompanyId | undefined): CompanyConfig | undefined
 // Plantilla LECKORTUNG (detección de fugas)
 // Campos AcroForm reales del PDF template-LECKORTUNG.pdf
 // ---------------------------------------------------------------------------
+
+// Texto fijo del bloque "Wichtiger Hinweis AUFTRAG" del PDF LECKORTUNG.
+// SIEMPRE se imprime este texto, no es editable por el técnico.
+export const LECKORTUNG_HINWEIS_TEXT =
+`Wichtiger Hinweis AUFTRAG
+Unsere Prüfungen / Arbeiten sind Dienstleistungen und werden ausdrücklich nur
+im Rahmen eines Dienstleistungsvertrages ausgeführt.
+Es gelten unsere AGB. Abweichungen hiervon müssen gegenseitig schriftlich vereinbart werden.
+
+Die Preisvereinbarung bei Auftragserteilung bezieht sich auf unsere aktuelle Dienstleistungspreisliste.
+Abweichungen von der gültigen Preisliste sind nur nach schriftlicher Vereinbarung gültig.
+Die Rechnung kann bei Vereinbarung vom Auftragnehmer per Email übergeben werden.`;
+
 const FIELD_MAP_LECKORTUNG: TemplateFieldMap = {
   "templateFields.auftragnehmer": "text_1dvn",                   // Auftragnehmer
   "projectInfo.locationObject":   "text_3clwz",                  // Schadenort

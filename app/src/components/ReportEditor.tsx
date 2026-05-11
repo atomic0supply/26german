@@ -1649,6 +1649,71 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       />
                     </label>
                   </div>
+
+                  <details
+                    className="form-panel form-panel--collapsible"
+                    style={{ marginTop: "0.75rem" }}
+                    open={Boolean(
+                      report.billing.workDate2 || report.billing.from2 || report.billing.to2
+                    )}
+                  >
+                    <summary>
+                      <span className="form-panel__eyebrow">
+                        {t("Técnico 2 (opcional)", "Techniker 2 (optional)")}
+                      </span>
+                    </summary>
+                    <p style={{ margin: "0.5rem 0", color: "var(--color-muted, #666)", fontSize: "0.85rem" }}>
+                      {t(
+                        "Solo si otro técnico también estuvo en obra y debe registrar sus horas.",
+                        "Nur falls ein weiterer Techniker vor Ort war und seine Zeiten erfassen muss."
+                      )}
+                    </p>
+                    <div className="grid two">
+                      <label>
+                        {t("Datum", "Datum")}
+                        <input
+                          type="date"
+                          value={report.billing.workDate2 ?? ""}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              billing: { ...previous.billing, workDate2: event.target.value }
+                            }))
+                          }
+                        />
+                      </label>
+                      <div />
+                      <label>
+                        {t("Arbeitszeit von", "Arbeitszeit von")}
+                        <input
+                          type="time"
+                          value={report.billing.from2 ?? ""}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              billing: { ...previous.billing, from2: event.target.value }
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        {t("Arbeitszeit bis", "Arbeitszeit bis")}
+                        <input
+                          type="time"
+                          value={report.billing.to2 ?? ""}
+                          disabled={!canMutateDraft}
+                          onChange={(event) =>
+                            updateReport((previous) => ({
+                              ...previous,
+                              billing: { ...previous.billing, to2: event.target.value }
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </details>
                 </div>
               </div>
             </SectionCard>

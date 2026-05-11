@@ -113,6 +113,11 @@ export interface Billing {
   to: string;
   workingTimeHours: string;
   workDate?: string;
+  // Segundo técnico (opcional): rellena la fila inferior de la tabla
+  // Abrechnung del PDF (campos creados programáticamente Abrechnung_Arbeitszeit_2_*).
+  from2?: string;
+  to2?: string;
+  workDate2?: string;
 }
 
 export interface Signature {

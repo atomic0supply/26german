@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import { functions, storage } from "../firebase";
-import { COMPANIES } from "../constants";
+import { COMPANIES, LECKORTUNG_HINWEIS_TEXT } from "../constants";
 import { Language, translate } from "../i18n";
 import { getCallableErrorMessage } from "../lib/callableErrors";
 import { CompanyId } from "../types";
@@ -279,16 +279,19 @@ export const LeckortungFormModal = ({
                 />
               </label>
               <label className="leckortung-field-full">
-                {t("Observaciones", "Hinweis")}
+                {t("Wichtiger Hinweis (fest)", "Wichtiger Hinweis (texto fijo)")}
                 <textarea
-                  value={form.hinweis}
-                  onChange={(e) => set("hinweis")(e.target.value)}
-                  rows={5}
-                  placeholder={t(
-                    "Observaciones técnicas, limitaciones de la inspección o notas para el cliente...",
-                    "Technische Hinweise, Grenzen der Untersuchung oder Notizen für den Kunden..."
-                  )}
+                  className="field-readonly"
+                  value={LECKORTUNG_HINWEIS_TEXT}
+                  rows={9}
+                  readOnly
                 />
+                <small style={{ color: "var(--color-muted, #666)", fontSize: "0.78rem", marginTop: "0.25rem", display: "block" }}>
+                  {t(
+                    "Dieser Text wird automatisch in das PDF eingefügt und ist nicht editierbar.",
+                    "Este texto se inserta automáticamente en el PDF y no es editable."
+                  )}
+                </small>
               </label>
               <label>
                 {t("Lugar y fecha", "Ort / Datum")}

@@ -74,6 +74,19 @@ export const TECHNIQUE_OPTIONS: LocalizedTechniqueOption[] = [
 
 export const PHOTO_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] as const;
 
+// Texto fijo del bloque "Wichtiger Hinweis AUFTRAG" del PDF LECKORTUNG.
+// SIEMPRE se imprime este texto en el campo `text_7yyii` del AcroForm.
+// Mantener sincronizado con `LECKORTUNG_HINWEIS_TEXT` en functions/src/templates.ts.
+export const LECKORTUNG_HINWEIS_TEXT =
+`Wichtiger Hinweis AUFTRAG
+Unsere Prüfungen / Arbeiten sind Dienstleistungen und werden ausdrücklich nur
+im Rahmen eines Dienstleistungsvertrages ausgeführt.
+Es gelten unsere AGB. Abweichungen hiervon müssen gegenseitig schriftlich vereinbart werden.
+
+Die Preisvereinbarung bei Auftragserteilung bezieht sich auf unsere aktuelle Dienstleistungspreisliste.
+Abweichungen von der gültigen Preisliste sind nur nach schriftlicher Vereinbarung gültig.
+Die Rechnung kann bei Vereinbarung vom Auftragnehmer per Email übergeben werden.`;
+
 // ---------------------------------------------------------------------------
 // Empresas
 // ---------------------------------------------------------------------------

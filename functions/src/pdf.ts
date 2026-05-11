@@ -24,7 +24,7 @@ import {
   TemplateFieldType,
   TemplateVersion
 } from "./types";
-import { COMPANIES } from "./templates";
+import { COMPANIES, LECKORTUNG_HINWEIS_TEXT } from "./templates";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -536,8 +536,19 @@ const applyFieldMap = (
         }
         continue;
       }
-      assignFieldValue(field, value);
-      if (options.stats) options.stats.written += 1;
+      try {
+        assignFieldValue(field, value);
+        if (options.stats) options.stats.written += 1;
+      } catch (assignErr) {
+        // Campos opcionales con error de escritura (p. ej. campo creado
+        // programáticamente pero sin /DA): solo advertir, no abortar.
+        if (options.optional) {
+          options.stats?.missing.push(fieldName);
+          console.warn(`[PDF] assignFieldValue optional "${fieldName}":`, assignErr instanceof Error ? assignErr.message : assignErr);
+        } else {
+          throw assignErr;
+        }
+      }
     }
   }
 };
@@ -1078,11 +1089,59 @@ const flattenSafe = (form: ReturnType<PDFDocument["getForm"]>) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Fila extra de Abrechnung: el PDF tiene 3 filas dibujadas pero solo la fila
+// central (Y=696) tiene campos AcroForm rellenables. Para soportar un segundo
+// técnico que también haya estado en obra, creamos programáticamente los 3
+// campos de la fila inferior (Y=683) si no existen ya.
+//
+// Coordenadas verificadas con pdftk sobre template-prok15.pdf y template-all15.pdf
+// (idénticos en este bloque). Página 7 (índice 0-based: 6).
+// ---------------------------------------------------------------------------
+const EXTRA_ARBEITSZEIT_ROW: Array<{
+  name: string;
+  rect: { x: number; y: number; width: number; height: number };
+}> = [
+  { name: "Abrechnung_Arbeitszeit_2_date", rect: { x: 135, y: 683, width: 131, height: 11 } },
+  { name: "Abrechnung_Arbeitszeit_2_von",  rect: { x: 432, y: 683, width: 62,  height: 11 } },
+  { name: "Abrechnung_Arbeitszeit_2_bis",  rect: { x: 497, y: 683, width: 68,  height: 11 } }
+];
+
+const ensureExtraArbeitszeitRow = (
+  pdf: PDFDocument,
+  form: ReturnType<PDFDocument["getForm"]>
+) => {
+  const pages = pdf.getPages();
+  const targetPage = pages[6]; // página 7 (1-based) = índice 6
+  if (!targetPage) return;
+
+  for (const { name, rect } of EXTRA_ARBEITSZEIT_ROW) {
+    // Idempotente: si el PDF ya incluye estos campos en el futuro, no los duplicamos.
+    if (getOptionalField(form, name)) continue;
+    try {
+      const tf = form.createTextField(name);
+      // addToPage DEBE ir antes que setFontSize: es addToPage quien
+      // establece la entrada /DA (default appearance) del campo.
+      // Si se llama setFontSize antes, pdf-lib lanza "No /DA entry found".
+      tf.addToPage(targetPage, {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        borderWidth: 0
+      });
+      tf.setFontSize(8);
+    } catch (err) {
+      console.warn(`[PDF] ensureExtraArbeitszeitRow: no se pudo crear el campo "${name}":`, err instanceof Error ? err.message : err);
+    }
+  }
+};
+
 /**
- * Devuelve una copia del report con el bloque "MessortObjekt" resuelto:
- * si los campos `name2/street2/city2/phone2/mobile2` están rellenos, esos
- * sobreescriben a los del cliente (`name1/street1/...`) — sirve como override
- * cuando el lugar de medición es distinto de la dirección del cliente.
+ * Devuelve una copia del report lista para la generación del PDF:
+ *  - Resuelve el override del bloque MessortObjekt (name2/street2/... > name1/street1/...).
+ *  - Para la plantilla LECKORTUNG, fuerza el texto fijo del bloque
+ *    "Wichtiger Hinweis AUFTRAG" en `templateFields.hinweis` (no editable).
  */
 const resolveMessortObjektOverride = (report: ReportData): ReportData => {
   const c = report.contacts;
@@ -1090,7 +1149,8 @@ const resolveMessortObjektOverride = (report: ReportData): ReportData => {
     const o = (overrideValue ?? "").trim();
     return o ? overrideValue ?? "" : baseValue ?? "";
   };
-  return {
+
+  const baseResolved: ReportData = {
     ...report,
     contacts: {
       ...c,
@@ -1101,6 +1161,19 @@ const resolveMessortObjektOverride = (report: ReportData): ReportData => {
       mobile1: pick(c.mobile2, c.mobile1),
     }
   };
+
+  // LECKORTUNG: el Hinweis siempre lleva el mismo texto legal/AGB
+  if (baseResolved.brandTemplateId === "leckortung") {
+    return {
+      ...baseResolved,
+      templateFields: {
+        ...baseResolved.templateFields,
+        hinweis: LECKORTUNG_HINWEIS_TEXT,
+      }
+    };
+  }
+
+  return baseResolved;
 };
 
 // ---------------------------------------------------------------------------
@@ -1121,7 +1194,12 @@ export const renderReportPdf = async (
   const pdf  = await PDFDocument.load(templateBytes, { ignoreEncryption: true });
   const form = pdf.getForm();
 
-  // 1.5. Resolver override del bloque MessortObjekt (name2/street2/... > name1/street1/...)
+  // 1.5. Asegurar que los campos del 2º técnico existen (creados programáticamente
+  // si no están en el PDF). Debe ir ANTES de applyAllAcroFormFields para que
+  // applyFieldMap los encuentre vía OPTIONAL_FIELD_MAP.
+  ensureExtraArbeitszeitRow(pdf, form);
+
+  // 1.6. Resolver override del bloque MessortObjekt (name2/street2/... > name1/street1/...)
   const resolvedReport = resolveMessortObjektOverride(report);
 
   // 2. Pipeline unificada: FIELD_MAP + OPTIONAL + Ergebnis_nien + técnicas + fotos-texto
@@ -1162,6 +1240,10 @@ export const fillReportPdfTemplate = async (
 ): Promise<Uint8Array> => {
   const pdf = await PDFDocument.load(templatePdf, { ignoreEncryption: true });
   const form = pdf.getForm();
+
+  // Asegurar la fila extra del 2º técnico antes del mapping (idempotente).
+  ensureExtraArbeitszeitRow(pdf, form);
+
   const resolvedReport = resolveMessortObjektOverride(report);
 
   // Pipeline unificada — misma que renderReportPdf, garantiza que los tests

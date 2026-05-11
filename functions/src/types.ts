@@ -112,6 +112,10 @@ export interface ReportData {
     to: string;
     workingTimeHours: string;
     workDate?: string;
+    // Segundo técnico (opcional) — fila inferior de la tabla Abrechnung
+    from2?: string;
+    to2?: string;
+    workDate2?: string;
   };
   templateFields: Record<string, TemplateFieldValue>;
   signature: {

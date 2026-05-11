@@ -121,6 +121,36 @@ const getValueByPath = (source: unknown, path: string): unknown =>
     return (cur as Record<string, unknown>)[seg];
   }, source);
 
+// Rutas de campos que contienen fechas ISO y deben formatearse como DD.MM.YYYY en el PDF
+const DATE_PATHS = new Set([
+  "projectInfo.appointmentDate",
+  "billing.workDate",
+]);
+
+// Rutas que provienen de `datetime-local` y deben conservar también HH:MM
+const DATE_TIME_PATHS = new Set([
+  "projectInfo.appointmentDate",
+]);
+
+/**
+ * Convierte un valor de fecha ISO (`2026-05-11` o `2026-05-11T12:28[:00]`) al
+ * formato alemán que espera el AcroForm.
+ *  - Si `includeTime` y el valor trae componente horaria → `DD.MM.YYYY HH:MM`.
+ *  - En otro caso → `DD.MM.YYYY`.
+ */
+const formatDateForPdf = (raw: unknown, includeTime = false): string => {
+  if (!raw || typeof raw !== "string") return "";
+  const [datePart, timePartRaw] = raw.includes("T") ? raw.split("T") : [raw, ""];
+  const parts = datePart.split("-");
+  if (parts.length !== 3) return raw;
+  const [year, month, day] = parts;
+  const formattedDate = `${day}.${month}.${year}`;
+  if (!includeTime || !timePartRaw) return formattedDate;
+  // timePartRaw puede ser `HH:MM` o `HH:MM:SS`; nos quedamos con HH:MM
+  const hhmm = timePartRaw.slice(0, 5);
+  return /^\d{2}:\d{2}$/.test(hhmm) ? `${formattedDate} ${hhmm}` : formattedDate;
+};
+
 const clamp = (value: number, min = 0.02, max = 0.98) => Math.min(max, Math.max(min, value));
 
 const normalizeAnnotation = (annotation: PhotoAnnotation): PhotoAnnotation => ({
@@ -362,14 +392,80 @@ const getOptionalField = (form: ReturnType<PDFDocument["getForm"]>, fieldName: s
   }
 };
 
+/**
+ * Marca o desmarca un checkbox AcroForm de forma robusta:
+ *  - Intenta primero el API estándar de pdf-lib (`check()` / `uncheck()`).
+ *  - Si falla, recurre al low-level: lee el valor "On" real de la appearance
+ *    dictionary del widget (puede ser /Yes, /On, /Ja, /1, etc.) y lo asigna
+ *    directamente al `/V` del campo.
+ */
+const setCheckboxValue = (field: PDFCheckBox, on: boolean) => {
+  try {
+    if (on) field.check();
+    else field.uncheck();
+    return;
+  } catch { /* fallback */ }
+
+  try {
+    const acro = (field as unknown as { acroField?: { setValue?: (v: unknown) => void; getWidgets?: () => Array<unknown> } }).acroField;
+    if (!acro) return;
+
+    if (!on) {
+      acro.setValue?.(PDFName.of("Off"));
+      return;
+    }
+
+    // Buscar el primer valor "On" disponible en los appearance streams
+    const widgets = acro.getWidgets?.() ?? [];
+    let onName: string | null = null;
+    for (const widget of widgets) {
+      const w = widget as { dict?: { get?: (n: unknown) => unknown } };
+      const apEntry = w.dict?.get?.(PDFName.of("AP"));
+      const apDict = apEntry as { get?: (n: unknown) => unknown } | undefined;
+      const nDict = apDict?.get?.(PDFName.of("N")) as { keys?: () => Array<unknown> } | undefined;
+      const keys = nDict?.keys?.() ?? [];
+      for (const k of keys) {
+        const keyName = (k as { decodeText?: () => string }).decodeText?.() ?? String(k);
+        if (keyName && keyName !== "Off") {
+          onName = keyName;
+          break;
+        }
+      }
+      if (onName) break;
+    }
+    acro.setValue?.(PDFName.of(onName ?? "Yes"));
+  } catch { /* ignorar */ }
+};
+
 const assignFieldValue = (field: PDFField, value: unknown) => {
   if (field instanceof PDFCheckBox) {
-    toBoolean(value) ? field.check() : field.uncheck();
+    setCheckboxValue(field, toBoolean(value));
     return;
   }
 
   if (field instanceof PDFTextField) {
-    field.enableMultiline();
+    // Detectar si el widget del campo es "alto" (área de texto/textarea)
+    let maxWidgetHeight = 0;
+    try {
+      const widgets = (field as unknown as {
+        acroField?: { getWidgets?: () => Array<{ getRectangle?: () => { height?: number } }> }
+      }).acroField?.getWidgets?.() ?? [];
+      for (const w of widgets) {
+        const rect = w.getRectangle?.();
+        if (rect?.height && rect.height > maxWidgetHeight) maxWidgetHeight = rect.height;
+      }
+    } catch { /* ignorar */ }
+
+    const tall = maxWidgetHeight >= 30; // umbral para considerar el campo como textarea
+    const isMultiline = field.isMultiline() || tall;
+
+    if (isMultiline) {
+      field.enableMultiline();
+      // Texto largo (Einsatzbericht, notas…): font muy pequeño para que quepa con wrapping
+      field.setFontSize(7);
+    } else {
+      field.setFontSize(8);
+    }
     field.setText(toText(value));
     return;
   }
@@ -402,11 +498,19 @@ const assignFieldValue = (field: PDFField, value: unknown) => {
 };
 
 // Rellena todos los campos del fieldMap principal
+// Estadísticas de aplicación de campos AcroForm: alimentadas por la pipeline
+// `applyAllAcroFormFields` para diagnosticar al final qué campos del FIELD_MAP
+// se escribieron y cuáles faltan en el PDF.
+interface ApplyStats {
+  written: number;
+  missing: string[];
+}
+
 const applyFieldMap = (
   form: ReturnType<PDFDocument["getForm"]>,
   report: ReportData,
   template: TemplateConfig,
-  options: { optional?: boolean } = {}
+  options: { optional?: boolean; stats?: ApplyStats } = {}
 ) => {
   const mapping = options.optional ? template.optionalFieldMap : template.fieldMap;
   if (!mapping) {
@@ -414,100 +518,148 @@ const applyFieldMap = (
   }
 
   for (const [logicalPath, target] of Object.entries(mapping)) {
-    const value = getValueByPath(report, logicalPath);
+    const rawValue = getValueByPath(report, logicalPath);
+    // Formatear fechas ISO; las que vienen de datetime-local conservan hora
+    const value = DATE_PATHS.has(logicalPath)
+      ? formatDateForPdf(rawValue, DATE_TIME_PATHS.has(logicalPath))
+      : rawValue;
     const targets = Array.isArray(target) ? target : [target];
     for (const fieldName of targets) {
       const field = getOptionalField(form, fieldName);
       if (!field) {
+        options.stats?.missing.push(fieldName);
+        // Campos opcionales: silencio. Campos requeridos: error fast — un
+        // mapping roto en el FIELD_MAP es un bug de configuración y debe ser
+        // detectado, no enmascarado.
         if (!options.optional) {
-          console.warn(`MAPPED_FIELD_NOT_FOUND:${fieldName}`);
+          throw new Error(`MAPPED_FIELD_NOT_FOUND:${fieldName}`);
         }
         continue;
       }
       assignFieldValue(field, value);
+      if (options.stats) options.stats.written += 1;
     }
   }
 };
 
-// Técnicas: el array de strings se mapea a checkboxes individuales del PDF
+// Técnicas: el array de strings (almacenado en report.techniques) se mapea a
+// los checkboxes AcroForm `Eingesetzte_*` del PDF.
+// La key es el valor exacto que guarda el formulario web (ver
+// `TECHNIQUE_OPTIONS` en app/src/constants.ts); el value es el nombre real del
+// campo AcroForm en template-all15.pdf / template-prok15.pdf.
 const TECHNIQUE_CHECKBOX_MAP: Record<string, string> = {
-  "Sichtprüfung":            "Sichtprüfung",
-  "Feuchtemessung":          "Feuchtemessung",
-  "Druckprobe":              "Druckprobe",
-  "Thermografie":            "Thermografie",
-  "Elektroakustik":          "Elektroakustik",
-  "Leitungsortung":          "Leitungsortung",
-  "Tracergas":               "Tracergas",
-  "Rohrkamera":              "Rohrkamera",
-  "Endoskopie":              "Endoskopie",
-  "Färbemittel":             "Färbemittel",
-  "Spülung":                 "Spülung",
-  "Leitfähigkeit":           "Leitfähigkeit",
-  "Dusch-Simulation":        "Dusch-Simulation",
-  "Rauchgas":                "Rauchgas",
-  "Niederschlagssimulation": "Niederschlagssimulation",
-  "IQM-Messtechnik":         "IQM-Messtechnik",
-  "Datenlogger":             "Datenlogger",
-  "Positionsortung":         "Positionsortung",
-  "Pegelmessung":            "Pegelmessung",
-  "Sonst_Information":       "Sonst_Information"
+  "Sichtprüfung":            "Eingesetzte_Sichtprüfung",
+  "Feuchtemessung":          "Eingesetzte_Feuchtemessung",
+  "Druckprobe":              "Eingesetzte_Druckprobe",
+  "Thermografie":            "Eingesetzte_Thermografie",
+  "Elektroakustik":          "Eingesetzte_Elektroakustik",
+  "Leitungsortung":          "Eingesetzte_Leitungsortung",
+  "Tracergas":               "Eingesetzte_Tracergas",
+  "Rohrkamera":              "Eingesetzte_Rohrkamera",
+  "Endoskopie":              "Eingesetzte_Endoskopie",
+  "Färbemittel":             "Eingesetzte_Farbstoff",
+  "Spülung":                 "Eingesetzte_Spülung",
+  "Leitfähigkeit":           "Eingesetzte_Leitfähigkeit",
+  "Dusch-Simulation":        "Eingesetzte_Dusch-Simulation",
+  "Rauchgas":                "Eingesetzte_Rauchgas",
+  "Niederschlagssimulation": "Eingesetzte_Niederschlags",
+  "IQM-Messtechnik":         "Eingesetzte_IQM-Messtechnik",
+  "Datenlogger":             "Eingesetzte_Datenlogger",
+  "Positionsortung":         "Eingesetzte_Positionsortung",
+  "Pegelmessung":            "Eingesetzte_Pegelmessung",
+  "Sonst_Information":       "Eingesetzte_Sonst_Information"
 };
 
 const applyTechniques = (
   form: ReturnType<PDFDocument["getForm"]>,
-  techniques: string[]
+  techniques: string[],
+  options: { stats?: ApplyStats } = {}
 ) => {
-  for (const [label, fieldName] of Object.entries(TECHNIQUE_CHECKBOX_MAP)) {
-    try {
-      const field = form.getField(fieldName);
-      if (field instanceof PDFCheckBox) {
-        techniques.includes(label) ? field.check() : field.uncheck();
-      }
-    } catch {
-      // campo no encontrado — ignorar silenciosamente
+  for (const [webValue, fieldName] of Object.entries(TECHNIQUE_CHECKBOX_MAP)) {
+    const shouldCheck = techniques.includes(webValue);
+    const field = getOptionalField(form, fieldName);
+    if (!field) {
+      options.stats?.missing.push(fieldName);
+      continue;
     }
+    if (!(field instanceof PDFCheckBox)) {
+      console.warn(`[PDF][techniques] campo "${fieldName}" no es un checkbox (${field.constructor.name})`);
+      continue;
+    }
+    setCheckboxValue(field, shouldCheck);
+    if (options.stats) options.stats.written += 1;
   }
 };
 
 // Ergebnis: "ja" se maneja en el FIELD_MAP; "nien" es el inverso de causeFound
 const applyFindingsResult = (
   form: ReturnType<PDFDocument["getForm"]>,
-  report: ReportData
+  report: ReportData,
+  options: { stats?: ApplyStats } = {}
 ) => {
-  try {
-    const field = form.getField("Ergebnis_nien");
-    if (field instanceof PDFCheckBox) {
-      report.findings.causeFound ? field.uncheck() : field.check();
-    }
-  } catch { /* campo no encontrado — ignorar */ }
+  const field = getOptionalField(form, "Ergebnis_nien");
+  if (!field) {
+    options.stats?.missing.push("Ergebnis_nien");
+    return;
+  }
+  if (field instanceof PDFCheckBox) {
+    setCheckboxValue(field, !report.findings.causeFound);
+    if (options.stats) options.stats.written += 1;
+  }
 };
 
 // Fotos: campos de texto (Ort y Dokumentation) por slot
 const applyPhotoTextFields = (
   form: ReturnType<PDFDocument["getForm"]>,
-  photos: ReportData["photos"]
+  photos: ReportData["photos"],
+  options: { stats?: ApplyStats } = {}
 ) => {
   for (let slot = 1; slot <= 14; slot++) {
     const photo = photos.find((p) => p.slot === slot);
     const ortField = slot === 2 ? "textarea_44uzoj" : `${slot}_bild_ortder`;
     const docField = `${slot}_bild_doku`;
 
-    try {
-      const ort = form.getField(ortField);
-      if (ort instanceof PDFTextField) {
-        ort.enableMultiline();
-        ort.setText(photo?.location ?? "");
-      }
-    } catch { /* ignorar */ }
+    const ort = getOptionalField(form, ortField);
+    if (ort instanceof PDFTextField) {
+      ort.enableMultiline();
+      ort.setFontSize(6);
+      ort.setText(photo?.location ?? "");
+      if (options.stats) options.stats.written += 1;
+    } else if (!ort) {
+      options.stats?.missing.push(ortField);
+    }
 
-    try {
-      const doc = form.getField(docField);
-      if (doc instanceof PDFTextField) {
-        doc.enableMultiline();
-        doc.setText(photo?.documentation ?? "");
-      }
-    } catch { /* ignorar */ }
+    const doc = getOptionalField(form, docField);
+    if (doc instanceof PDFTextField) {
+      doc.enableMultiline();
+      doc.setFontSize(6);
+      doc.setText(photo?.documentation ?? "");
+      if (options.stats) options.stats.written += 1;
+    } else if (!doc) {
+      options.stats?.missing.push(docField);
+    }
   }
+};
+
+// ---------------------------------------------------------------------------
+// Pipeline unificada: aplica TODAS las escrituras AcroForm de un report builtin
+// (FIELD_MAP + OPTIONAL_FIELD_MAP + Ergebnis_nien + Eingesetzte_* + fotos).
+// Devuelve estadísticas para logging diagnóstico.
+// ---------------------------------------------------------------------------
+const applyAllAcroFormFields = (
+  form: ReturnType<PDFDocument["getForm"]>,
+  report: ReportData,
+  template: TemplateConfig
+): ApplyStats => {
+  const stats: ApplyStats = { written: 0, missing: [] };
+
+  applyFieldMap(form, report, template, { stats });
+  applyFieldMap(form, report, template, { optional: true, stats });
+  applyFindingsResult(form, report, { stats });
+  applyTechniques(form, report.techniques ?? [], { stats });
+  applyPhotoTextFields(form, report.photos ?? [], { stats });
+
+  return stats;
 };
 
 // ---------------------------------------------------------------------------
@@ -603,7 +755,8 @@ const drawPhotoAnnotations = async (
       });
     } else if (annotation.type === "text") {
       if (!annotation.text?.trim()) continue;
-      const fontSize = Math.max(5, sw * 1.2);
+      // Limitar font size de anotaciones: mínimo 5pt, máximo 11pt
+      const fontSize = Math.max(5, Math.min(11, sw * 1.2));
       page.drawText(annotation.text, {
         x: centerX,
         y: centerY,
@@ -911,12 +1064,43 @@ const flattenSafe = (form: ReturnType<PDFDocument["getForm"]>) => {
     }
   }
 
+  // Nota: NO llamamos a `form.updateFieldAppearances()` global aquí.
+  // Esa función regenera TODOS los appearance streams usando el /DA original
+  // del template, lo cual pisa el `setFontSize` que aplicamos a los campos de
+  // fotos y al Einsatzbericht. Las apariencias individuales ya quedan al día
+  // porque `setText()` y `setCheckboxValue()` regeneran cada widget al
+  // asignar valor.
   try {
     form.flatten();
   } catch {
     // Si flatten falla por algún campo problemático, el PDF sigue siendo válido
     // con los campos de texto ya rellenados; simplemente no se aplana.
   }
+};
+
+/**
+ * Devuelve una copia del report con el bloque "MessortObjekt" resuelto:
+ * si los campos `name2/street2/city2/phone2/mobile2` están rellenos, esos
+ * sobreescriben a los del cliente (`name1/street1/...`) — sirve como override
+ * cuando el lugar de medición es distinto de la dirección del cliente.
+ */
+const resolveMessortObjektOverride = (report: ReportData): ReportData => {
+  const c = report.contacts;
+  const pick = (overrideValue: string | undefined, baseValue: string | undefined) => {
+    const o = (overrideValue ?? "").trim();
+    return o ? overrideValue ?? "" : baseValue ?? "";
+  };
+  return {
+    ...report,
+    contacts: {
+      ...c,
+      name1:   pick(c.name2,   c.name1),
+      street1: pick(c.street2, c.street1),
+      city1:   pick(c.city2,   c.city1),
+      phone1:  pick(c.phone2,  c.phone1),
+      mobile1: pick(c.mobile2, c.mobile1),
+    }
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -937,33 +1121,30 @@ export const renderReportPdf = async (
   const pdf  = await PDFDocument.load(templateBytes, { ignoreEncryption: true });
   const form = pdf.getForm();
 
-  // 2. Rellenar campos AcroForm estándar
-  applyFieldMap(form, report, template);
-  applyFieldMap(form, report, template, { optional: true });
+  // 1.5. Resolver override del bloque MessortObjekt (name2/street2/... > name1/street1/...)
+  const resolvedReport = resolveMessortObjektOverride(report);
 
-  // 2b. Ergebnis_nien (inverso de causeFound)
-  applyFindingsResult(form, report);
+  // 2. Pipeline unificada: FIELD_MAP + OPTIONAL + Ergebnis_nien + técnicas + fotos-texto
+  const stats = applyAllAcroFormFields(form, resolvedReport, template);
+  console.log(
+    `[PDF] AcroForm aplicado: written=${stats.written} missing=${stats.missing.length}` +
+      (stats.missing.length > 0 ? ` samples=${JSON.stringify(stats.missing.slice(0, 10))}` : "")
+  );
 
-  // 3. Técnicas (array → checkboxes individuales)
-  applyTechniques(form, report.techniques ?? []);
+  // 3. Imágenes de fotos (dibujadas sobre las páginas)
+  await drawPhotoImages(pdf, resolvedReport.photos ?? [], bucket, resolvedReport);
 
-  // 4. Campos de texto de fotos (Ort + Dokumentation)
-  applyPhotoTextFields(form, report.photos ?? []);
+  // 4. Logo de empresa (esquina superior derecha de todas las páginas)
+  await drawCompanyLogo(pdf, resolvedReport.companyId, bucket);
 
-  // 5. Imágenes de fotos (dibujadas sobre las páginas)
-  await drawPhotoImages(pdf, report.photos ?? [], bucket, report);
-
-  // 6. Logo de empresa (esquina superior derecha de todas las páginas)
-  await drawCompanyLogo(pdf, report.companyId, bucket);
-
-  // 7. Firma técnica (SVT) / Firma del cliente (LECKORTUNG)
-  if (report.brandTemplateId === "leckortung") {
-    await drawLeckortungCustomerSignature(pdf, report.templateFields, bucket);
+  // 5. Firma técnica (SVT) / Firma del cliente (LECKORTUNG)
+  if (resolvedReport.brandTemplateId === "leckortung") {
+    await drawLeckortungCustomerSignature(pdf, resolvedReport.templateFields, bucket);
   } else {
-    await drawSignature(pdf, report.signature, bucket);
+    await drawSignature(pdf, resolvedReport.signature, bucket);
   }
 
-  // 8. Aplanar si es versión final
+  // 6. Aplanar si es versión final
   if (options.flatten) {
     flattenSafe(form);
   }
@@ -981,15 +1162,15 @@ export const fillReportPdfTemplate = async (
 ): Promise<Uint8Array> => {
   const pdf = await PDFDocument.load(templatePdf, { ignoreEncryption: true });
   const form = pdf.getForm();
+  const resolvedReport = resolveMessortObjektOverride(report);
 
-  applyFieldMap(form, report, template);
-  applyFieldMap(form, report, template, { optional: true });
-  applyFindingsResult(form, report);
-  applyTechniques(form, report.techniques ?? []);
-  applyPhotoTextFields(form, report.photos ?? []);
-  await drawPhotoImages(pdf, report.photos ?? [], bucket, report);
-  await drawCompanyLogo(pdf, report.companyId, bucket);
-  await drawSignature(pdf, report.signature, bucket);
+  // Pipeline unificada — misma que renderReportPdf, garantiza que los tests
+  // ejerciten exactamente la misma ruta de escritura AcroForm que producción.
+  applyAllAcroFormFields(form, resolvedReport, template);
+
+  await drawPhotoImages(pdf, resolvedReport.photos ?? [], bucket, resolvedReport);
+  await drawCompanyLogo(pdf, resolvedReport.companyId, bucket);
+  await drawSignature(pdf, resolvedReport.signature, bucket);
 
   if (options.flatten) {
     form.flatten();

@@ -19,12 +19,41 @@ export type CompanyId =
   | "homekoncept"
   | "wasat";
 
+export interface PartnerData {
+  id: string;
+  name: string;
+  contactPerson: string;
+  street: string;
+  city: string;
+  phone: string;
+  mobile: string;
+  email: string;
+  web: string;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PartnerSnapshot {
+  id: string;
+  name: string;
+  contactPerson: string;
+  street: string;
+  city: string;
+  phone: string;
+  mobile: string;
+  email: string;
+  web: string;
+}
+
 export interface ReportData {
   clientId?: string;
   brandTemplateId: TemplateId;
   templateVersionId?: string;
   companyId?: CompanyId;
   templateName?: string;
+  partnerId?: string;
+  partner?: PartnerSnapshot;
   projectInfo: {
     projectNumber: string;
     auftragserteilung?: string;
@@ -58,6 +87,7 @@ export interface ReportData {
     causeFound: boolean;
     causeExposed: boolean;
     temporarySeal: boolean;
+    ursacheGefunden: boolean;
     summary: string;
   };
   actions: {

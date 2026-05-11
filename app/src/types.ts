@@ -86,6 +86,7 @@ export interface Findings {
   causeFound: boolean;
   causeExposed: boolean;
   temporarySeal: boolean;
+  ursacheGefunden: boolean;
   summary: string;
 }
 
@@ -203,12 +204,42 @@ export interface SuggestTemplateSchemaResult {
   schemaSource: TemplateSchemaSource;
 }
 
+export interface PartnerData {
+  id: string;
+  name: string;            // Firma / nombre empresa (→ campo `kunde` del PDF)
+  contactPerson: string;   // Persona de contacto (→ `kunde_name`)
+  street: string;          // Straße / dirección (→ `kunde_strabe`)
+  city: string;            // PLZ + Ort (→ `kunde_ort`)
+  phone: string;           // Telefon (→ `kunde_telefon`)
+  mobile: string;          // Mobil (→ `kunde_mobil`)
+  email: string;           // Email (→ `kunde_email`)
+  web: string;             // Web (opcional)
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Snapshot del partner guardado en el informe (no es referencia, es copia)
+export interface PartnerSnapshot {
+  id: string;
+  name: string;
+  contactPerson: string;
+  street: string;
+  city: string;
+  phone: string;
+  mobile: string;
+  email: string;
+  web: string;
+}
+
 export interface ReportData {
   clientId: string;
   brandTemplateId: TemplateId;
   templateVersionId?: string;
   companyId?: CompanyId;
   templateName?: string;
+  partnerId?: string;
+  partner?: PartnerSnapshot;
   projectInfo: ProjectInfo;
   contacts: ContactDetails;
   damageChecklist: DamageChecklist;

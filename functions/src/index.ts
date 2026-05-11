@@ -1818,6 +1818,147 @@ export const analyzeInspectionPhoto = onCall(async (request) => {
   };
 });
 
+// ---------------------------------------------------------------------------
+// IA — Generación / mejora del Einsatzbericht (texto)
+// ---------------------------------------------------------------------------
+
+async function callGeminiText(
+  apiKey: string,
+  model: string,
+  promptText: string
+): Promise<string> {
+  const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
+  const body = {
+    contents: [
+      {
+        parts: [{ text: promptText }]
+      }
+    ]
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    const err = new Error(`Gemini ${res.status}: ${res.statusText} — ${errBody}`);
+    (err as unknown as Record<string, unknown>).status = res.status;
+    throw err;
+  }
+  const json = await res.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  return (json.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim();
+}
+
+type EinsatzberichtMode = "generate" | "improve" | "professional" | "structure";
+
+interface GenerateDamageSummaryRequest {
+  reportId?: string;
+  mode: EinsatzberichtMode;
+  currentText?: string;
+  damage?: string;
+  findings?: string;
+  actions?: string;
+}
+
+const MODE_INSTRUCTIONS: Record<EinsatzberichtMode, string> = {
+  generate:
+    "Genera el Einsatzbericht desde cero a partir de los datos disponibles. Devuelve ÚNICAMENTE el texto del informe, sin encabezados ni explicaciones.",
+  improve:
+    "Mejora el siguiente borrador del Einsatzbericht: corrige gramática y ortografía en alemán, usa terminología técnica precisa de fontanería/detección de fugas, mantén el sentido original. Devuelve ÚNICAMENTE el texto mejorado.",
+  professional:
+    "Reescribe el siguiente Einsatzbericht en un tono profesional y formal en alemán técnico. Mantén la información, mejora la redacción. Devuelve ÚNICAMENTE el texto reescrito.",
+  structure:
+    "Reestructura el siguiente Einsatzbericht como un informe técnico claro, en alemán, con frases concisas y bien ordenadas (situación, hallazgos, acciones, recomendaciones). Devuelve ÚNICAMENTE el texto resultante.",
+};
+
+export const generateDamageSummary = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "AUTH_REQUIRED");
+
+  const payload = (request.data ?? {}) as GenerateDamageSummaryRequest;
+  const mode: EinsatzberichtMode = MODE_INSTRUCTIONS[payload.mode] ? payload.mode : "generate";
+  const currentText = (payload.currentText ?? "").trim();
+  const damage = (payload.damage ?? "").trim();
+  const findings = (payload.findings ?? "").trim();
+  const actions = (payload.actions ?? "").trim();
+
+  // Para todos los modos salvo "generate" necesitamos texto previo
+  if (mode !== "generate" && !currentText) {
+    throw new HttpsError("invalid-argument", "CURRENT_TEXT_REQUIRED");
+  }
+
+  // Leer config IA
+  const aiSnap = await db.doc("config/ai").get();
+  if (!aiSnap.exists) throw new HttpsError("failed-precondition", "AI_NOT_CONFIGURED");
+  const aiData = aiSnap.data()!;
+  const apiKey: string | undefined = aiData.apiKey;
+  if (!apiKey) throw new HttpsError("failed-precondition", "AI_NO_API_KEY");
+  const textModel: string = aiData.textModel ?? DEFAULT_AI_CONFIG.textModel;
+
+  // Leer prompt "damage_summary" (custom o default)
+  const promptsSnap = await db.doc("config/aiPrompts").get();
+  const customPrompts: AiPrompt[] = promptsSnap.exists ? (promptsSnap.data()!.prompts ?? []) : [];
+  const customDamagePrompt = customPrompts.find((p) => p.id === "damage_summary");
+  const damagePromptBase =
+    customDamagePrompt?.content ??
+    DEFAULT_PROMPTS.find((p) => p.id === "damage_summary")?.content ??
+    "Redacta en alemán un Einsatzbericht técnico. Daño: {{damage}}. Hallazgos: {{findings}}. Acciones: {{actions}}.";
+
+  // Sustituir variables del prompt base
+  const filledBase = damagePromptBase
+    .replace(/\{\{damage\}\}/g, damage || "—")
+    .replace(/\{\{findings\}\}/g, findings || "—")
+    .replace(/\{\{actions\}\}/g, actions || "—");
+
+  // Componer prompt final según modo
+  let finalPrompt: string;
+  if (mode === "generate") {
+    finalPrompt = `${filledBase}\n\n${MODE_INSTRUCTIONS.generate}`;
+  } else {
+    finalPrompt =
+      `Contexto del informe — Daño: ${damage || "—"}. Hallazgos: ${findings || "—"}. Acciones: ${actions || "—"}.\n\n` +
+      `Borrador actual del Einsatzbericht:\n"""\n${currentText}\n"""\n\n` +
+      MODE_INSTRUCTIONS[mode];
+  }
+
+  // Llamar a Gemini Text con fallback de modelos
+  const modelsToTry = [textModel];
+  if (textModel !== "gemini-2.5-flash") modelsToTry.push("gemini-2.5-flash");
+  if (textModel !== "gemini-2.5-flash-lite") modelsToTry.push("gemini-2.5-flash-lite");
+
+  let resultText: string | null = null;
+  let usedModel = textModel;
+
+  for (const candidate of modelsToTry) {
+    try {
+      resultText = await callGeminiText(apiKey, candidate, finalPrompt);
+      usedModel = candidate;
+      break;
+    } catch (geminiErr) {
+      const errStatus = (geminiErr as { status?: number }).status;
+      const errMsg = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
+      logger.warn("generateDamageSummary: fallo con modelo", { candidate, errStatus, errMsg });
+      if (errStatus !== 404 && errStatus !== 400) {
+        throw new HttpsError("internal", `AI_GENERATION_FAILED: ${errMsg}`);
+      }
+    }
+  }
+
+  if (resultText === null) {
+    throw new HttpsError("failed-precondition", "AI_NO_VALID_MODEL");
+  }
+
+  return {
+    text: resultText,
+    model: usedModel,
+    mode,
+    generatedAt: new Date().toISOString()
+  };
+});
+
 // ─── Delete a single report and its assets ────────────────────────────────────
 export const deleteReport = onCall({ cors: true }, async (request) => {
   const uid = request.auth?.uid;
@@ -1984,4 +2125,196 @@ export const seedDemoClients = onCall({ cors: true }, async (request) => {
 
   logger.info("seedDemoClients", { uid, clients: createdClients.length });
   return { clients: createdClients.length };
+});
+
+// ---------------------------------------------------------------------------
+// Partners / Firmen (empresas colaboradoras) — CRUD + seed
+// Colección Firestore: partners/{partnerId}
+// kunde* del PDF se rellena con los datos del Partner seleccionado en el informe.
+// ---------------------------------------------------------------------------
+
+import type { PartnerData } from "./types";
+
+const normalizePartnerInput = (raw: unknown): Omit<PartnerData, "id" | "createdBy" | "createdAt" | "updatedAt"> => {
+  const data = (raw ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return {
+    name:          str(data.name),
+    contactPerson: str(data.contactPerson),
+    street:        str(data.street),
+    city:          str(data.city),
+    phone:         str(data.phone),
+    mobile:        str(data.mobile),
+    email:         str(data.email),
+    web:           str(data.web)
+  };
+};
+
+export const listPartners = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "AUTH_REQUIRED");
+
+  const snap = await db.collection("partners").orderBy("name").get();
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+});
+
+export const savePartner = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "AUTH_REQUIRED");
+  const role = await getActiveUserRole(uid);
+  if (!canReadAcrossTeam(role)) throw new HttpsError("permission-denied", "FORBIDDEN");
+
+  const payload = (request.data ?? {}) as { id?: string } & Record<string, unknown>;
+  const partnerId = String(payload.id ?? "").trim() || randomUUID();
+  const data = normalizePartnerInput(payload);
+
+  if (!data.name) throw new HttpsError("invalid-argument", "NAME_REQUIRED");
+
+  const now = new Date().toISOString();
+  const ref = db.doc(`partners/${partnerId}`);
+  const existing = await ref.get();
+
+  await ref.set({
+    ...data,
+    createdBy: existing.exists ? (existing.data()?.createdBy ?? uid) : uid,
+    createdAt: existing.exists ? (existing.data()?.createdAt ?? now) : now,
+    updatedAt: now
+  }, { merge: false });
+
+  return { id: partnerId, ...data };
+});
+
+export const deletePartner = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "AUTH_REQUIRED");
+  const role = await getActiveUserRole(uid);
+  if (!canReadAcrossTeam(role)) throw new HttpsError("permission-denied", "FORBIDDEN");
+
+  const partnerId = String(request.data?.id ?? "").trim();
+  if (!partnerId) throw new HttpsError("invalid-argument", "ID_REQUIRED");
+
+  await db.doc(`partners/${partnerId}`).delete();
+  return { deleted: true, id: partnerId };
+});
+
+// Seed de partners iniciales (idempotente — usa upsert por nombre)
+const INITIAL_PARTNERS: Array<Omit<PartnerData, "id" | "createdBy" | "createdAt" | "updatedAt">> = [
+  {
+    name: "Angerhausen Trocknungstechnik",
+    contactPerson: "",
+    street: "Im Stockwoog 7",
+    city: "66862 Kindsbach",
+    phone: "+49 6371 1300849",
+    mobile: "",
+    email: "info@Angerhausen-LTS.de",
+    web: ""
+  },
+  {
+    name: "Brasa GmbH",
+    contactPerson: "",
+    street: "Schlackenbergstr. 33",
+    city: "66386 St. Ingbert",
+    phone: "+49 6894/921880",
+    mobile: "",
+    email: "info@brasa-gmbh.de",
+    web: ""
+  },
+  {
+    name: "Herrmann-Pirmasens",
+    contactPerson: "",
+    street: "Blocksbergstr. 168",
+    city: "66955 Pirmasens",
+    phone: "+49 6331 7226111",
+    mobile: "",
+    email: "info@herrmann-j.de",
+    web: ""
+  },
+  {
+    name: "Herrmann-Saarbrücken",
+    contactPerson: "",
+    street: "Gewerbegebiet Heidekorn",
+    city: "66287 Quierschied",
+    phone: "+49 681/91033660",
+    mobile: "",
+    email: "s.meiser@herrmann-j.de",
+    web: ""
+  },
+  {
+    name: "SVT Saarbrücken",
+    contactPerson: "",
+    street: "Nobelstr. 4",
+    city: "66130 Saarbrücken",
+    phone: "+49 681 94006110",
+    mobile: "",
+    email: "schadensanierung-saarbruecken@svt.de",
+    web: ""
+  },
+  {
+    name: "Homekonzept Saarlouis",
+    contactPerson: "",
+    street: "Philipp-Reis-Straße 6 a",
+    city: "66793 Saarwellingen",
+    phone: "+49 6838 / 20 89 490",
+    mobile: "",
+    email: "",
+    web: "www.homekonzept.eu"
+  },
+  {
+    name: "Wasa-Tec",
+    contactPerson: "",
+    street: "Hunsrückstraße 3",
+    city: "66679 Losheim am See",
+    phone: "+49 6861 / 9120 195",
+    mobile: "",
+    email: "info@wasa-tec.eu",
+    web: ""
+  }
+];
+
+export const seedDemoPartners = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "AUTH_REQUIRED");
+  await assertAdmin(uid);
+
+  const now = new Date().toISOString();
+  let created = 0;
+  let updated = 0;
+
+  // Cargar partners existentes por nombre para no duplicar
+  const existingSnap = await db.collection("partners").get();
+  const existingByName = new Map<string, string>();
+  for (const doc of existingSnap.docs) {
+    const data = doc.data() as PartnerData;
+    if (data?.name) existingByName.set(data.name.trim().toLowerCase(), doc.id);
+  }
+
+  for (const partner of INITIAL_PARTNERS) {
+    const key = partner.name.trim().toLowerCase();
+    const existingId = existingByName.get(key);
+    const partnerId = existingId ?? randomUUID();
+    const ref = db.doc(`partners/${partnerId}`);
+
+    if (existingId) {
+      // Solo actualizamos campos vacíos para no pisar ediciones manuales
+      const cur = (await ref.get()).data() ?? {};
+      const merged: Record<string, unknown> = { ...cur };
+      for (const [k, v] of Object.entries(partner)) {
+        if (!cur[k] && v) merged[k] = v;
+      }
+      merged.updatedAt = now;
+      await ref.set(merged, { merge: false });
+      updated += 1;
+    } else {
+      await ref.set({
+        ...partner,
+        createdBy: uid,
+        createdAt: now,
+        updatedAt: now
+      });
+      created += 1;
+    }
+  }
+
+  logger.info("seedDemoPartners", { uid, created, updated });
+  return { created, updated, total: INITIAL_PARTNERS.length };
 });

@@ -28,7 +28,7 @@ import { Language, localeForLanguage, translate } from "../i18n";
 import { getCallableErrorMessage } from "../lib/callableErrors";
 import { normalizeReportData } from "../lib/firestore";
 import { validateReportForFinalize } from "../lib/validation";
-import { ClientData, CompanyId, FinalizeReportResult, ReportData, ReportPhoto } from "../types";
+import { ClientData, CompanyId, FinalizeReportResult, PartnerData, ReportData, ReportPhoto } from "../types";
 import { PhotoAnnotation, PhotoAnnotatorLite } from "./PhotoAnnotatorLite";
 import { TemplateDrivenReportEditor } from "./TemplateDrivenReportEditor";
 import { ActionBar } from "./ui/ActionBar";
@@ -125,6 +125,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const locale = localeForLanguage(language);
   const [report, setReport] = useState<ReportData | null>(null);
   const [clients, setClients] = useState<ClientData[]>([]);
+  const [partners, setPartners] = useState<PartnerData[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "dirty" | "saving" | "saved">("idle");
@@ -137,6 +138,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const [activePhotoSlot, setActivePhotoSlot] = useState<number>(1);
   const [analyzingSlots, setAnalyzingSlots] = useState<Set<number>>(new Set());
   const [photoAiError, setPhotoAiError] = useState<string>("");
+  const [einsatzAiMode, setEinsatzAiMode] = useState<null | "generate" | "improve" | "professional" | "structure">(null);
+  const [einsatzAiError, setEinsatzAiError] = useState<string>("");
   const previewBlobUrlRef = useRef("");
   const initializedRef = useRef(false);
   const lastPersistedFingerprintRef = useRef("");
@@ -206,6 +209,33 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
 
     return unsubscribe;
   }, [locale, uid, userRole]);
+
+  // Partners / Firmen colaboradoras → rellenan el bloque `kunde` del PDF
+  useEffect(() => {
+    const partnersRef = collection(db, "partners");
+    const unsubscribe = onSnapshot(
+      partnersRef,
+      (snapshot) => {
+        const next = snapshot.docs.map((item) => {
+          const data = item.data();
+          return {
+            id: item.id,
+            name: String(data.name ?? ""),
+            contactPerson: String(data.contactPerson ?? ""),
+            street: String(data.street ?? ""),
+            city: String(data.city ?? ""),
+            phone: String(data.phone ?? ""),
+            mobile: String(data.mobile ?? ""),
+            email: String(data.email ?? ""),
+            web: String(data.web ?? "")
+          } satisfies PartnerData;
+        }).sort((a, b) => a.name.localeCompare(b.name, locale));
+        setPartners(next);
+      },
+      () => setPartners([])
+    );
+    return unsubscribe;
+  }, [locale]);
 
   useEffect(() => {
     return () => {
@@ -416,6 +446,67 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         next.delete(slot);
         return next;
       });
+    }
+  };
+
+  const buildEinsatzContext = (data: ReportData) => {
+    const damageFlags = DAMAGE_OPTIONS
+      .filter((opt) => data.damageChecklist.flags[opt.key])
+      .map((opt) => opt.deLabel);
+    const damageNotes = (data.damageChecklist.notes ?? "").trim();
+    const damage = [damageFlags.join(", "), damageNotes].filter(Boolean).join(" — ");
+
+    const findingsParts: string[] = [];
+    if (data.findings.causeFound) findingsParts.push("Ursache gefunden");
+    else findingsParts.push("Ursache nicht gefunden");
+    if (data.findings.causeExposed) findingsParts.push("Ursache freigelegt");
+    if (data.findings.temporarySeal) findingsParts.push("Notabdichtung angebracht");
+    const findingsSummary = (data.findings.summary ?? "").trim();
+    const findings = [findingsParts.join(", "), findingsSummary].filter(Boolean).join(" — ");
+
+    const actionFlags = ACTION_OPTIONS
+      .filter((opt) => data.actions.flags[opt.key])
+      .map((opt) => opt.deLabel);
+    const actionNotes = (data.actions.notes ?? "").trim();
+    const actions = [actionFlags.join(", "), actionNotes].filter(Boolean).join(" — ");
+
+    return { damage, findings, actions };
+  };
+
+  const runEinsatzberichtAi = async (mode: "generate" | "improve" | "professional" | "structure") => {
+    if (!report || !canMutateDraft || !isOnline) return;
+    setEinsatzAiError("");
+    setEinsatzAiMode(mode);
+    try {
+      const ctx = buildEinsatzContext(report);
+      const callable = httpsCallable<
+        {
+          reportId: string;
+          mode: "generate" | "improve" | "professional" | "structure";
+          currentText: string;
+          damage: string;
+          findings: string;
+          actions: string;
+        },
+        { text: string; model: string; mode: string; generatedAt: string }
+      >(functions, "generateDamageSummary");
+      const result = await callable({
+        reportId,
+        mode,
+        currentText: report.findings.summary ?? "",
+        damage: ctx.damage,
+        findings: ctx.findings,
+        actions: ctx.actions,
+      });
+      updateReport((previous) => ({
+        ...previous,
+        findings: { ...previous.findings, summary: result.data.text }
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setEinsatzAiError(t("Error al generar el Einsatzbericht.", "Fehler beim Erstellen des Einsatzberichts.") + (msg ? ` (${msg})` : ""));
+    } finally {
+      setEinsatzAiMode(null);
     }
   };
 
@@ -741,6 +832,82 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
               description={t("Vincula el informe al cliente correcto y completa la dirección de trabajo.", "Verknüpfe den Bericht mit dem richtigen Kunden und Einsatzort.")}
             >
               <div className="form-panel-grid">
+                <div className="form-panel form-panel__full">
+                  <span className="form-panel__eyebrow">{t("Partner / Firma colaboradora", "Partner / Firma")}</span>
+                  <p style={{ margin: "0 0 0.5rem 0", color: "var(--color-muted, #666)", fontSize: "0.85rem" }}>
+                    {t(
+                      "Selecciona la empresa colaboradora. Sus datos se rellenan automáticamente en el bloque „Kunde\" del PDF.",
+                      "Wähle die Partnerfirma. Ihre Daten werden automatisch in den Block „Kunde\" des PDF eingetragen."
+                    )}
+                  </p>
+                  <div className="grid two">
+                    <label className="form-panel__full">
+                      {t("Partner / Firma", "Partner / Firma")}
+                      <select
+                        value={report.partnerId ?? ""}
+                        disabled={!canMutateDraft}
+                        onChange={(event) => {
+                          const nextPartnerId = event.target.value;
+                          const selected = partners.find((p) => p.id === nextPartnerId);
+                          updateReport((previous) => ({
+                            ...previous,
+                            partnerId: nextPartnerId,
+                            partner: selected
+                              ? {
+                                  id: selected.id,
+                                  name: selected.name,
+                                  contactPerson: selected.contactPerson,
+                                  street: selected.street,
+                                  city: selected.city,
+                                  phone: selected.phone,
+                                  mobile: selected.mobile,
+                                  email: selected.email,
+                                  web: selected.web
+                                }
+                              : {
+                                  id: "", name: "", contactPerson: "", street: "", city: "",
+                                  phone: "", mobile: "", email: "", web: ""
+                                }
+                          }));
+                        }}
+                      >
+                        <option value="">{t("— Sin partner —", "— Kein Partner —")}</option>
+                        {partners.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {report.partner?.id && (
+                    <div className="grid two" style={{ marginTop: "0.75rem" }}>
+                      <label>
+                        {t("Firma (Kunde)", "Firma (Kunde)")}
+                        <input className="field-readonly" value={report.partner.name} readOnly />
+                      </label>
+                      <label>
+                        {t("Persona de contacto", "Ansprechpartner")}
+                        <input className="field-readonly" value={report.partner.contactPerson} readOnly />
+                      </label>
+                      <label>
+                        {t("Dirección", "Straße")}
+                        <input className="field-readonly" value={report.partner.street} readOnly />
+                      </label>
+                      <label>
+                        {t("PLZ / Localidad", "PLZ / Ort")}
+                        <input className="field-readonly" value={report.partner.city} readOnly />
+                      </label>
+                      <label>
+                        {t("Teléfono", "Telefon")}
+                        <input className="field-readonly" value={report.partner.phone} readOnly />
+                      </label>
+                      <label>
+                        {t("Email", "E-Mail")}
+                        <input className="field-readonly" value={report.partner.email} readOnly />
+                      </label>
+                    </div>
+                  )}
+                </div>
+
                 <div className="form-panel">
                   <span className="form-panel__eyebrow">{t("Ficha del cliente", "Kundenprofil")}</span>
                   <div className="grid two">
@@ -766,7 +933,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                                   name1: [selected.name, selected.surname].filter(Boolean).join(" ") || selected.principalContact,
                                   email: selected.email,
                                   phone1: selected.phone,
-                                  street1: selected.location
+                                  street1: [selected.street, selected.streetNumber].filter(Boolean).join(" ").trim() || selected.location,
+                                  city1: [selected.postalCode, selected.city].filter(Boolean).join(" ").trim()
                                 }
                               : previous.contacts
                           }));
@@ -883,11 +1051,57 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                         }
                       />
                     </label>
+                    <label>
+                      {t("PLZ + Localidad", "PLZ + Ort")}
+                      <input
+                        value={report.contacts.city1}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              city1: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("Móvil", "Mobil")}
+                      <input
+                        value={report.contacts.mobile1}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            contacts: {
+                              ...previous.contacts,
+                              mobile1: event.target.value
+                            }
+                          }))
+                        }
+                      />
+                    </label>
                   </div>
                 </div>
 
-                <div className="form-panel">
-                  <span className="form-panel__eyebrow">{t("Lugar de medición / Objeto", "Messort / Objekt")}</span>
+                <details
+                  className="form-panel form-panel--collapsible"
+                  open={Boolean(
+                    report.contacts.name2 || report.contacts.street2 || report.contacts.city2 ||
+                    report.contacts.phone2 || report.contacts.mobile2 || report.actions.coordinateWith
+                  )}
+                >
+                  <summary style={{ cursor: "pointer", userSelect: "none", listStyle: "revert", padding: "0.25rem 0" }}>
+                    <span className="form-panel__eyebrow">{t("Lugar de medición / Objeto (opcional)", "Messort / Objekt (optional)")}</span>
+                  </summary>
+                  <p style={{ margin: "0.5rem 0", color: "var(--color-muted, #666)", fontSize: "0.85rem" }}>
+                    {t(
+                      "Solo si el objeto a medir difiere de la dirección del cliente. Si lo dejas vacío, el PDF imprime los datos del cliente en „MessortObjekt\".",
+                      "Nur wenn das Messobjekt von der Kundenadresse abweicht. Bleibt es leer, druckt das PDF die Kundendaten in „MessortObjekt\"."
+                    )}
+                  </p>
                   <div className="grid two">
                     <label>
                       {t("Nombre", "Name")}
@@ -968,7 +1182,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       />
                     </label>
                   </div>
-                </div>
+                </details>
               </div>
               {selectedClient && (
                 <div className="validation-list validation-list--success">
@@ -1152,6 +1366,20 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                   <label className="checkbox">
                     <input
                       type="checkbox"
+                      checked={report.findings.ursacheGefunden}
+                      disabled={!canMutateDraft}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, ursacheGefunden: event.target.checked }
+                        }))
+                      }
+                    />
+                    {t("Causa encontrada", "Ursache gefunden")}
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
                       checked={report.findings.causeExposed}
                       disabled={!canMutateDraft}
                       onChange={(event) =>
@@ -1306,10 +1534,94 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
 
               <div className="form-panel-grid">
                 <div className="form-panel form-panel__full">
+                  <span className="form-panel__eyebrow">{t("Einsatzbericht", "Einsatzbericht")}</span>
+                  <label>
+                    {t("Einsatzbericht — Texto del informe", "Einsatzbericht — Berichttext")}
+                    <textarea
+                      rows={8}
+                      value={report.findings.summary ?? ""}
+                      disabled={!canMutateDraft || einsatzAiMode !== null}
+                      onChange={(event) =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          findings: { ...previous.findings, summary: event.target.value }
+                        }))
+                      }
+                      placeholder={t(
+                        "Beschreibe den Einsatz: Situation, Untersuchung, Maßnahmen und Empfehlungen.",
+                        "Describe la intervención: situación, inspección, medidas y recomendaciones."
+                      )}
+                    />
+                  </label>
+                  <div className="einsatz-ai-actions" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canMutateDraft || !isOnline || einsatzAiMode !== null}
+                      onClick={() => runEinsatzberichtAi("generate")}
+                    >
+                      {einsatzAiMode === "generate"
+                        ? t("Generierend…", "Generando…")
+                        : t("KI: Bericht generieren", "IA: Generar informe")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canMutateDraft || !isOnline || einsatzAiMode !== null || !(report.findings.summary ?? "").trim()}
+                      onClick={() => runEinsatzberichtAi("improve")}
+                    >
+                      {einsatzAiMode === "improve"
+                        ? t("Verbessernd…", "Mejorando…")
+                        : t("KI: Text verbessern", "IA: Mejorar texto")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canMutateDraft || !isOnline || einsatzAiMode !== null || !(report.findings.summary ?? "").trim()}
+                      onClick={() => runEinsatzberichtAi("professional")}
+                    >
+                      {einsatzAiMode === "professional"
+                        ? t("Umschreibend…", "Reescribiendo…")
+                        : t("KI: Professionell umschreiben", "IA: Reescribir profesional")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canMutateDraft || !isOnline || einsatzAiMode !== null || !(report.findings.summary ?? "").trim()}
+                      onClick={() => runEinsatzberichtAi("structure")}
+                    >
+                      {einsatzAiMode === "structure"
+                        ? t("Strukturierend…", "Estructurando…")
+                        : t("KI: Als technischer Bericht strukturieren", "IA: Estructurar como informe técnico")}
+                    </button>
+                  </div>
+                  {einsatzAiError && (
+                    <p className="form-error" style={{ marginTop: "0.5rem" }}>{einsatzAiError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-panel-grid">
+                <div className="form-panel form-panel__full">
                   <span className="form-panel__eyebrow">{t("Abrechnung", "Abrechnung")}</span>
                   <div className="grid two">
                     <label>
-                      {t("Abrechnung desde", "Abrechnung von")}
+                      {t("Datum", "Datum")}
+                      <input
+                        type="date"
+                        value={report.billing.workDate ?? ""}
+                        disabled={!canMutateDraft}
+                        onChange={(event) =>
+                          updateReport((previous) => ({
+                            ...previous,
+                            billing: { ...previous.billing, workDate: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <div />
+                    <label>
+                      {t("Arbeitszeit von", "Arbeitszeit von")}
                       <input
                         type="time"
                         value={report.billing.from}
@@ -1323,7 +1635,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       />
                     </label>
                     <label>
-                      {t("Abrechnung hasta", "Abrechnung bis")}
+                      {t("Arbeitszeit bis", "Arbeitszeit bis")}
                       <input
                         type="time"
                         value={report.billing.to}
@@ -1332,20 +1644,6 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                           updateReport((previous) => ({
                             ...previous,
                             billing: { ...previous.billing, to: event.target.value }
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t("Arbeitszeit", "Arbeitszeit")}
-                      <input
-                        type="date"
-                        value={report.billing.workDate ?? ""}
-                        disabled={!canMutateDraft}
-                        onChange={(event) =>
-                          updateReport((previous) => ({
-                            ...previous,
-                            billing: { ...previous.billing, workDate: event.target.value }
                           }))
                         }
                       />

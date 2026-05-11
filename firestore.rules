@@ -104,6 +104,13 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Partners / Firmen colaboradoras: lectura para cualquier técnico autenticado
+    // (necesario para el selector en el informe); escritura solo office/admin.
+    match /partners/{partnerId} {
+      allow read: if isAppUser();
+      allow create, update, delete: if isOfficeOrAdmin();
+    }
+
     match /templates/{templateId} {
       allow read: if isAppUser() && (resource.data.status == 'published' || isAdmin());
       allow create, update, delete: if isAdmin();

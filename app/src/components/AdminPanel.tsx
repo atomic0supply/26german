@@ -6,6 +6,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, functions, storage } from "../firebase";
 import { Language, translate } from "../i18n";
 import { AiConfig, AiPrompt, AiPromptPurpose, BrandingConfig, UserRole } from "../types";
+import { PartnerManager } from "./PartnerManager";
 import { SettingsPanel } from "./SettingsPanel";
 import { TemplateAdminPanel } from "./TemplateAdminPanel";
 import { SectionCard } from "./ui/SectionCard";
@@ -28,6 +29,7 @@ type AdminPage =
   | "smtp"
   | "status"
   | "templates"
+  | "partners"
   | "settings"
   | "ia"
   | "prompts"
@@ -73,7 +75,7 @@ const NAV_GROUPS: Array<{ group?: AdminGroupKey; items: AdminPage[] }> = [
   { items: ["dashboard"] },
   { group: "team", items: ["users"] },
   { group: "appearance", items: ["appearance"] },
-  { group: "documents", items: ["templates"] },
+  { group: "documents", items: ["templates", "partners"] },
   { group: "messaging", items: ["smtp"] },
   { group: "ai", items: ["ia", "prompts"] },
   { group: "system", items: ["status", "settings", "testdata", "ayuda"] }
@@ -158,6 +160,14 @@ const AdminNavIcon = ({ page }: { page: AdminPage }) => {
           <path d="M14 4.5v4h4" />
           <path d="M9 12h6" />
           <path d="M9 15.5h6" />
+        </svg>
+      );
+    case "partners":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M16 11a4 4 0 1 0-8 0" />
+          <circle cx="12" cy="7" r="3" />
+          <path d="M3 21v-1a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5v1" />
         </svg>
       );
     case "settings":
@@ -332,6 +342,8 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
         return t("Systemstatus", "Estado del sistema");
       case "templates":
         return t("PDF-Vorlagen", "Plantillas PDF");
+      case "partners":
+        return t("Partner / Firmen", "Partners / Empresas");
       case "settings":
         return t("Profil & System", "Perfil y sistema");
       case "ia":
@@ -1482,6 +1494,20 @@ export const AdminPanel = ({ language, isOnline, uid, onLanguageChange, user, us
           )}
         >
           <TemplateAdminPanel uid={uid} isOnline={isOnline} language={language} />
+        </SectionCard>
+      );
+    }
+
+    if (page === "partners") {
+      return (
+        <SectionCard
+          title={t("Partner / Firmen", "Partners / Empresas colaboradoras")}
+          description={t(
+            "Verwalte die kollaborierenden Firmen. Der ausgewählte Partner füllt den „Kunde\"-Block des PDF aus.",
+            "Gestiona las empresas colaboradoras. El partner seleccionado rellena el bloque „Kunde\" del PDF."
+          )}
+        >
+          <PartnerManager language={language} isOnline={isOnline} />
         </SectionCard>
       );
     }

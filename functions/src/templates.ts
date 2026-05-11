@@ -12,20 +12,23 @@ const FIELD_MAP: TemplateFieldMap = {
   "projectInfo.locationObject":    "MessortObjekt_name",
   "projectInfo.auftragserteilung": "Auftragserteilung",
 
-  // Kunde (lado izquierdo)
-  "contacts.name1":   ["kunde", "kunde_name"],
-  "contacts.street1": "kunde_strabe",
-  "contacts.city1":   "kunde_ort",
-  "contacts.phone1":  "kunde_telefon",
-  "contacts.mobile1": "kunde_mobil",
-  "contacts.email":   "kunde_email",
+  // Kunde (lado izquierdo del PDF) = Partner / Firma colaboradora
+  // ⚠️ kunde* ya NO contiene los datos del cliente final; corresponde al Partner seleccionado en el informe.
+  "partner.name":          "kunde",
+  "partner.contactPerson": "kunde_name",
+  "partner.street":        "kunde_strabe",
+  "partner.city":          "kunde_ort",
+  "partner.phone":         "kunde_telefon",
+  "partner.mobile":        "kunde_mobil",
+  "partner.email":         "kunde_email",
 
-  // MessortObjekt (lado derecho)
-  "contacts.name2":   "MessortObjekt_name",
-  "contacts.street2": "MessortObjekt_strabe",
-  "contacts.city2":   "MessortObjekt_ort",
-  "contacts.phone2":  "MessortObjekt_telefon",
-  "contacts.mobile2": "MessortObjekt_mobil",
+  // MessortObjekt (lado derecho del PDF) = Cliente final / lugar de medición
+  // Mapeamos los campos del cliente seleccionado (name1/street1/city1/phone1/mobile1).
+  "contacts.name1":   "MessortObjekt_name",
+  "contacts.street1": "MessortObjekt_strabe",
+  "contacts.city1":   "MessortObjekt_ort",
+  "contacts.phone1":  "MessortObjekt_telefon",
+  "contacts.mobile1": "MessortObjekt_mobil",
   "actions.coordinateWith": "MessortObjekt_siehekunde",
 
   // Schadensbild
@@ -33,7 +36,10 @@ const FIELD_MAP: TemplateFieldMap = {
   "damageChecklist.flags.druckabfall":    "Schadensbild_Druckabfall",
   "damageChecklist.flags.wasserverlust":  "schadensbild_wasserverlust",
   "damageChecklist.flags.wasseraustritt": "Schadensbild_Wasseraustritt",
-  "damageChecklist.flags.schimmel":       "schadensbild_wasseraustritt",
+  // Nota: el PDF prok15/all15 no incluye un checkbox propio para Schimmel.
+  // El dato se conserva en damageChecklist.notes (texto libre) y, si se quiere,
+  // se puede mencionar en el Einsatzbericht. NO mapear aquí para no sobreescribir
+  // accidentalmente "Schadensbild_Wasseraustritt".
 
   // Anwesende
   "attendees.flags.eigentumer":   "Anwesende_Eigentümer",
@@ -44,9 +50,10 @@ const FIELD_MAP: TemplateFieldMap = {
   "attendees.flags.versicherung": "Anwesende_versicherung",
 
   // Ergebnis der Überprüfung
-  "findings.causeFound":    "Ergebnis_ja",
-  "findings.causeExposed":  "Ergebnis_ursache_freigelegt",
-  "findings.temporarySeal": "Ergebnis_Notabdichtung",
+  "findings.causeFound":      "Ergebnis_ja",
+  "findings.causeExposed":    "Ergebnis_ursache_freigelegt",
+  "findings.temporarySeal":   "Ergebnis_Notabdichtung",
+  "findings.ursacheGefunden": "Ergebnis_ursache_gefunden",
 
   // Weiteres (acciones)
   "actions.flags.technischeTrocknung":  "Weiteres_Techn_Trocknung",
@@ -77,8 +84,8 @@ const FIELD_MAP_ALL: TemplateFieldMap = {
 const OPTIONAL_FIELD_MAP: TemplateFieldMap = {
   "templateFields.sonstiges":      "Weiteres_Sonstiges_text",
   "templateFields.abzustimmenText": "Weiteres_Abzustimmen_mit_text",
-  "billing.from":                "von",
-  "billing.to":                  "bis",
+  "billing.from":                "Abrechnung_Arbeitszeit_von",
+  "billing.to":                  "Abrechnung_Arbeitszeit_bis",
   "billing.workDate":            "Abrechnung_Arbeitszeit_1_date"
 };
 

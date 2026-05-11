@@ -26,6 +26,18 @@ export const createDefaultReport = (uid: string, options: CreateDefaultReportOpt
     ...(options.templateVersionId !== undefined && { templateVersionId: options.templateVersionId }),
     ...(options.companyId !== undefined && { companyId: options.companyId }),
     templateName: options.templateName ?? REPORT_TEMPLATE.name,
+    partnerId: "",
+    partner: {
+      id: "",
+      name: "",
+      contactPerson: "",
+      street: "",
+      city: "",
+      phone: "",
+      mobile: "",
+      email: "",
+      web: ""
+    },
     projectInfo: {
       projectNumber: "",
       auftragserteilung: "",
@@ -59,6 +71,7 @@ export const createDefaultReport = (uid: string, options: CreateDefaultReportOpt
       causeFound: false,
       causeExposed: false,
       temporarySeal: false,
+      ursacheGefunden: false,
       summary: ""
     },
     actions: {

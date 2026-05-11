@@ -2374,6 +2374,40 @@ small {
   grid-column: 1 / -1;
 }
 
+.form-panel--collapsible {
+  cursor: default;
+}
+
+.form-panel--collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  outline: none;
+}
+
+.form-panel--collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.form-panel--collapsible > summary::before {
+  content: "▸";
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+  transition: transform 0.15s ease;
+}
+
+.form-panel--collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.form-panel--collapsible > summary:hover .form-panel__eyebrow {
+  color: var(--ink, #102033);
+}
+
 .field-readonly {
   background: rgba(16, 32, 51, 0.05);
   color: var(--ink-muted);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Language, translate } from "../i18n";
+import { createTranslator, Language } from "../i18n";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export type PhotoAnnotationShape = "arrow" | "rect" | "circle" | "pin" | "pen" | "text";
@@ -151,7 +151,7 @@ const rotHandle = (cx: number, cy: number, w: number, h: number, rot: number) =>
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled = false, onChange }: PhotoAnnotatorLiteProps) => {
-  const t = (es: string, de: string) => translate(language, de, es);
+  const t = createTranslator(language);
 
   // ── Tool state ──
   const [tool, setTool] = useState<ActiveTool>("arrow");
@@ -531,12 +531,12 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
   };
 
   const TOOLS: Array<{ id: ActiveTool; icon: React.ReactNode; tip: string }> = [
-    { id: "arrow",  icon: Ic.arrow,  tip: t("Flecha",      "Pfeil") },
-    { id: "rect",   icon: Ic.rect,   tip: t("Rectángulo",  "Rechteck") },
-    { id: "circle", icon: Ic.circle, tip: t("Círculo",     "Kreis") },
-    { id: "pin",    icon: Ic.pin,    tip: t("Punto",       "Punkt") },
-    { id: "pen",    icon: Ic.pen,    tip: t("Lápiz",       "Stift") },
-    { id: "text",   icon: Ic.text,   tip: t("Texto",       "Text") },
+    { id: "arrow",  icon: Ic.arrow,  tip: t("Pfeil",     "Flecha") },
+    { id: "rect",   icon: Ic.rect,   tip: t("Rechteck",  "Rectángulo") },
+    { id: "circle", icon: Ic.circle, tip: t("Kreis",     "Círculo") },
+    { id: "pin",    icon: Ic.pin,    tip: t("Punkt",     "Punto") },
+    { id: "pen",    icon: Ic.pen,    tip: t("Stift",     "Lápiz") },
+    { id: "text",   icon: Ic.text,   tip: t("Text",      "Texto") },
   ];
 
   return (
@@ -564,7 +564,7 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
                 style={{ background: pc, ...(pc === "#ffffff" ? { border: "1.5px solid rgba(0,0,0,0.18)" } : {}) }}
                 onClick={() => setColor(pc)} title={pc} />
             ))}
-            <label className="ann__color-custom" title={t("Color personalizado", "Benutzerdefinierte Farbe")}>
+            <label className="ann__color-custom" title={t("Benutzerdefinierte Farbe", "Color personalizado")}>
               <input type="color" value={color} onChange={e => setColor(e.target.value)} />
               <span className="ann__color-custom-ring" />
             </label>
@@ -578,7 +578,7 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
               <button key={s} type="button"
                 className={`ann__tbtn ann__szbn ${strokeSize === s ? "active" : ""}`}
                 onClick={() => setStrokeSize(s)}
-                title={s === "sm" ? t("Fino", "Dünn") : s === "lg" ? t("Grueso", "Dick") : t("Medio", "Mittel")}>
+                title={s === "sm" ? t("Dünn", "Fino") : s === "lg" ? t("Dick", "Grueso") : t("Mittel", "Medio")}>
                 <span className="ann__szdot" style={{ width: 6 + i * 4, height: 6 + i * 4 }} />
               </button>
             ))}
@@ -596,8 +596,8 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
 
           {/* Delete */}
           <div className="ann__tgroup">
-            <button type="button" className="ann__tbtn ann__tbtn--danger" onClick={() => { if (selected) { commitUpdate(localAnn.filter(a => a.id !== selectedId)); setSelectedId(""); } }} disabled={!selected} title={t("Borrar seleccionada", "Auswahl löschen") + " (Del)"}>{Ic.trash}</button>
-            <button type="button" className="ann__tbtn ann__tbtn--danger" onClick={() => { commitUpdate([]); setSelectedId(""); }} disabled={localAnn.length === 0} title={t("Borrar todo", "Alles löschen")}>{Ic.clear}</button>
+            <button type="button" className="ann__tbtn ann__tbtn--danger" onClick={() => { if (selected) { commitUpdate(localAnn.filter(a => a.id !== selectedId)); setSelectedId(""); } }} disabled={!selected} title={t("Auswahl löschen", "Borrar seleccionada") + " (Del)"}>{Ic.trash}</button>
+            <button type="button" className="ann__tbtn ann__tbtn--danger" onClick={() => { commitUpdate([]); setSelectedId(""); }} disabled={localAnn.length === 0} title={t("Alles löschen", "Borrar todo")}>{Ic.clear}</button>
           </div>
         </div>
       )}
@@ -621,7 +621,7 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
             <div style={{ position: "absolute", left: `${pendingText.x * 100}%`, top: `${pendingText.y * 100}%`, transform: "translate(-50%, -50%)", zIndex: 20 }}>
               <input ref={textInputRef} className="ann__textfield"
                 type="text" value={pendingText.text}
-                placeholder={t("Escribe y pulsa Enter", "Text eingeben + Enter")}
+                placeholder={t("Text eingeben + Enter", "Escribe y pulsa Enter")}
                 onChange={e => setPendingText(p => p ? { ...p, text: e.target.value } : null)}
                 onKeyDown={e => { if (e.key === "Enter") confirmText(); if (e.key === "Escape") setPendingText(null); }}
                 onBlur={confirmText}
@@ -650,12 +650,12 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
 
         {/* Zoom controls */}
         <div className="ann__zoom-ctrl">
-          <button type="button" className="ann__zoom-btn" title={t("Acercar", "Vergrößern")}
+          <button type="button" className="ann__zoom-btn" title={t("Vergrößern", "Acercar")}
             onClick={() => setZoom(z => Math.min(MAX_ZOOM, z * 1.25))}>{Ic.zoomIn}</button>
-          <button type="button" className="ann__zoom-btn" title={t("Alejar", "Verkleinern")}
+          <button type="button" className="ann__zoom-btn" title={t("Verkleinern", "Alejar")}
             onClick={() => setZoom(z => { const nz = Math.max(MIN_ZOOM, z * 0.8); if (nz <= 1.05) { setPanX(0); setPanY(0); return 1; } return nz; })}>{Ic.zoomOut}</button>
           {zoom > 1.05 && (
-            <button type="button" className="ann__zoom-btn ann__zoom-btn--reset" title={t("Restablecer zoom", "Zoom zurücksetzen")}
+            <button type="button" className="ann__zoom-btn ann__zoom-btn--reset" title={t("Zoom zurücksetzen", "Restablecer zoom")}
               onClick={() => { setZoom(1); setPanX(0); setPanY(0); }}>1:1</button>
           )}
         </div>
@@ -665,14 +665,14 @@ export const PhotoAnnotatorLite = ({ imageUrl, annotations, language, disabled =
       {!disabled && (
         <div className="ann__status">
           {isSpaceDown
-            ? <span>🤚 {t("Modo paneo · arrastra para mover", "Pan-Modus · ziehen zum Verschieben")}</span>
+            ? <span>🤚 {t("Pan-Modus · ziehen zum Verschieben", "Modo paneo · arrastra para mover")}</span>
             : tool === "pen"
-            ? <span>✏️ {t("Dibuja libremente · suelta para confirmar", "Freihand zeichnen · loslassen zum Bestätigen")}</span>
+            ? <span>✏️ {t("Freihand zeichnen · loslassen zum Bestätigen", "Dibuja libremente · suelta para confirmar")}</span>
             : tool === "text"
-            ? <span>T {t("Haz clic para añadir texto", "Klicken um Text hinzuzufügen")}</span>
+            ? <span>T {t("Klicken um Text hinzuzufügen", "Haz clic para añadir texto")}</span>
             : selected
-            ? <span>↕ {t("Arrastra para mover · asa para redimensionar · Supr para borrar", "Ziehen zum Verschieben · Griff zum Skalieren · Entf zum Löschen")}</span>
-            : <span>+ {t("Clic para añadir · Scroll para zoom · Espacio+arrastra para paneo", "Klick zum Hinzufügen · Scroll Zoom · Leertaste+Ziehen Pan")} {localAnn.length > 0 && `· ${localAnn.length} ${t("marca(s)", "Markierung(en)")}`}</span>
+            ? <span>↕ {t("Ziehen zum Verschieben · Griff zum Skalieren · Entf zum Löschen", "Arrastra para mover · asa para redimensionar · Supr para borrar")}</span>
+            : <span>+ {t("Klick zum Hinzufügen · Scroll Zoom · Leertaste+Ziehen Pan", "Clic para añadir · Scroll para zoom · Espacio+arrastra para paneo")} {localAnn.length > 0 && `· ${localAnn.length} ${t("Markierung(en)", "marca(s)")}`}</span>
           }
         </div>
       )}

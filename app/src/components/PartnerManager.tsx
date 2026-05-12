@@ -135,16 +135,30 @@ export const PartnerManager = ({ language, isOnline }: PartnerManagerProps) => {
 
   const partnerCount = useMemo(() => partners.length, [partners]);
 
+  const initialsOf = (name: string) =>
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() ?? "")
+      .join("") || "?";
+
+  const avatarHue = (name: string) => {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+    return h;
+  };
+
   return (
     <div className="partner-manager">
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem", alignItems: "center" }}>
+      <div className="partner-manager__toolbar">
         <button type="button" className="btn-primary" onClick={startNew} disabled={!isOnline}>
           {t("Neuer Partner", "Nuevo partner")}
         </button>
         <button type="button" className="btn-secondary" onClick={() => void handleSeed()} disabled={!isOnline || seeding}>
           {seeding ? t("Lade...", "Cargando...") : t("Initiale Partner laden", "Cargar partners iniciales")}
         </button>
-        <span style={{ marginLeft: "auto", color: "var(--color-muted, #666)", fontSize: "0.85rem" }}>
+        <span className="partner-manager__count">
           {partnerCount} {t("Partner", "partners")}
         </span>
       </div>
@@ -152,51 +166,86 @@ export const PartnerManager = ({ language, isOnline }: PartnerManagerProps) => {
       {error && <p className="form-error" style={{ marginBottom: "0.75rem" }}>{error}</p>}
       {notice && <p className="form-notice" style={{ marginBottom: "0.75rem" }}>{notice}</p>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.2fr)", gap: "1.5rem" }}>
+      <div className="partner-manager__layout">
         <div>
-          <h3 style={{ marginTop: 0 }}>{t("Liste der Partner", "Listado de partners")}</h3>
+          <h3 className="partner-manager__heading">{t("Liste der Partner", "Listado de partners")}</h3>
           {loading ? (
             <p>{t("Lade...", "Cargando...")}</p>
           ) : partners.length === 0 ? (
             <p>{t("Keine Partner vorhanden.", "Sin partners.")}</p>
           ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {partners.map((p) => (
-                <li
-                  key={p.id}
-                  style={{
-                    padding: "0.6rem 0.8rem",
-                    border: "1px solid var(--color-border, #e0e0e0)",
-                    borderRadius: 6,
-                    marginBottom: "0.5rem",
-                    background: editing?.id === p.id ? "rgba(19,95,150,0.08)" : "transparent"
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-                    <div style={{ minWidth: 0 }}>
-                      <strong>{p.name}</strong>
-                      <div style={{ fontSize: "0.85rem", color: "var(--color-muted, #666)" }}>
-                        {[p.street, p.city].filter(Boolean).join(", ")}
-                      </div>
-                      {p.email && <div style={{ fontSize: "0.85rem" }}>{p.email}</div>}
-                    </div>
-                    <div style={{ display: "flex", gap: "0.25rem", flexShrink: 0 }}>
-                      <button type="button" className="btn-secondary" onClick={() => startEdit(p)}>
-                        {t("Bearbeiten", "Editar")}
+            <ul className="partner-list">
+              {partners.map((p) => {
+                const isActive = editing?.id === p.id;
+                const addressLine = [p.street, p.city].filter(Boolean).join(" · ");
+                return (
+                  <li
+                    key={p.id}
+                    className={isActive ? "partner-card partner-card--active" : "partner-card"}
+                  >
+                    <button
+                      type="button"
+                      className="partner-card__body"
+                      onClick={() => startEdit(p)}
+                      aria-label={t(`${p.name} bearbeiten`, `Editar ${p.name}`)}
+                    >
+                      <span
+                        className="partner-card__avatar"
+                        style={{ background: `hsl(${avatarHue(p.name)} 60% 45%)` }}
+                        aria-hidden="true"
+                      >
+                        {initialsOf(p.name)}
+                      </span>
+                      <span className="partner-card__info">
+                        <strong className="partner-card__name">{p.name}</strong>
+                        {p.contactPerson && (
+                          <span className="partner-card__contact">{p.contactPerson}</span>
+                        )}
+                        {addressLine && (
+                          <span className="partner-card__address">{addressLine}</span>
+                        )}
+                        {p.email && <span className="partner-card__email">{p.email}</span>}
+                      </span>
+                    </button>
+                    <div className="partner-card__actions">
+                      <button
+                        type="button"
+                        className="partner-card__action"
+                        onClick={() => startEdit(p)}
+                        title={t("Bearbeiten", "Editar")}
+                        aria-label={t("Bearbeiten", "Editar")}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                        </svg>
                       </button>
-                      <button type="button" className="btn-danger" onClick={() => void handleDelete(p)} disabled={!isOnline}>
-                        {t("Löschen", "Eliminar")}
+                      <button
+                        type="button"
+                        className="partner-card__action partner-card__action--danger"
+                        onClick={() => void handleDelete(p)}
+                        disabled={!isOnline}
+                        title={t("Löschen", "Eliminar")}
+                        aria-label={t("Löschen", "Eliminar")}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                        </svg>
                       </button>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
 
         <div>
-          <h3 style={{ marginTop: 0 }}>
+          <h3 className="partner-manager__heading">
             {editing ? t("Partner bearbeiten", "Editar partner") : t("Neuer Partner", "Nuevo partner")}
           </h3>
           <div className="grid two">

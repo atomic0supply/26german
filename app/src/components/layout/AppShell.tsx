@@ -74,6 +74,17 @@ const NavIcon = ({ id }: { id: string }) => {
   }
 };
 
+const RAIL_COLLAPSED_KEY = "app-rail-collapsed";
+
+const readInitialCollapsed = (): boolean => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
 export const AppShell = ({
   brandTitle,
   brandSubtitle,
@@ -92,9 +103,25 @@ export const AppShell = ({
   children
 }: AppShellProps) => {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(readInitialCollapsed);
   const t = useMemo(() => createTranslator(language), [language]);
   const userLabel = user.displayName?.trim() || user.email?.trim() || defaultUserLabel(language);
   const roleLabel = userRole === "admin" ? t("Admin", "Admin") : userRole === "office" ? t("Büro", "Oficina") : t("Techniker", "Técnico");
+  const userInitials = userLabel
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "•";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(RAIL_COLLAPSED_KEY, isCollapsed ? "1" : "0");
+    } catch {
+      // Ignore storage errors in restricted environments.
+    }
+  }, [isCollapsed]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -151,51 +178,96 @@ export const AppShell = ({
     setIsMobileNavOpen(false);
   };
 
-  const railContent = (
-    <>
-      <div className="app-rail__brand">
-        {logoUrl && <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />}
-        <span className="app-rail__eyebrow">{t("Operatives CRM", "CRM operativo")}</span>
-        <h1>{brandTitle}</h1>
-        {brandSubtitle && <p>{brandSubtitle}</p>}
-      </div>
-
-      <nav className="app-rail__nav" aria-label={t("Hauptnavigation", "Navegación principal")}>
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={item.id === activeItem ? "app-rail__nav-item active" : "app-rail__nav-item"}
-            onClick={() => handleSelect(item.id)}
-          >
-            <span className="app-rail__glyph">
-              <NavIcon id={item.id} />
-            </span>
-            <span className="app-rail__copy">
-              <strong>{item.label}</strong>
-              {item.description && <small>{item.description}</small>}
-            </span>
-            {item.badge && <span className="app-rail__badge">{item.badge}</span>}
-          </button>
-        ))}
-      </nav>
-
-      <div className="app-rail__footer">
-        <div className="app-identity-card">
-          <strong>{userLabel}</strong>
-          <span>{roleLabel}</span>
-          <small>{isOnline ? t("Verbunden", "Conectado") : t("Offline", "Sin conexión")}</small>
+  const renderRail = (variant: "desktop" | "drawer") => {
+    const showCollapsed = variant === "desktop" && isCollapsed;
+    return (
+      <>
+        <div className="app-rail__brand">
+          <div className="app-rail__brand-mark">
+            {logoUrl ? (
+              <img src={logoUrl} className="app-rail__logo" alt={brandTitle} />
+            ) : (
+              <span className="app-rail__logo app-rail__logo--placeholder" aria-hidden="true">
+                {brandTitle.charAt(0).toUpperCase()}
+              </span>
+            )}
+          </div>
+          {!showCollapsed && (
+            <div className="app-rail__brand-text">
+              <strong>{brandTitle}</strong>
+              {brandSubtitle && <span>{brandSubtitle}</span>}
+            </div>
+          )}
+          {variant === "desktop" && (
+            <button
+              type="button"
+              className="app-rail__collapse"
+              aria-label={showCollapsed ? t("Menü erweitern", "Expandir menú") : t("Menü einklappen", "Plegar menú")}
+              aria-pressed={showCollapsed}
+              onClick={() => setIsCollapsed((prev) => !prev)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d={showCollapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} />
+              </svg>
+            </button>
+          )}
         </div>
-        <button type="button" className="ghost" onClick={() => void onLogout()}>
-          {t("Abmelden", "Cerrar sesión")}
-        </button>
-      </div>
-    </>
-  );
+
+        <nav className="app-rail__nav" aria-label={t("Hauptnavigation", "Navegación principal")}>
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={item.id === activeItem ? "app-rail__nav-item active" : "app-rail__nav-item"}
+              onClick={() => handleSelect(item.id)}
+              title={showCollapsed ? item.label : undefined}
+              aria-label={showCollapsed ? item.label : undefined}
+            >
+              <span className="app-rail__glyph">
+                <NavIcon id={item.id} />
+              </span>
+              {!showCollapsed && <span className="app-rail__copy">{item.label}</span>}
+              {item.badge && (
+                <span className={showCollapsed ? "app-rail__badge app-rail__badge--dot" : "app-rail__badge"}>
+                  {showCollapsed ? "" : item.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        <div className="app-rail__footer">
+          <div className="app-identity-card">
+            <span className="app-identity-card__avatar" aria-hidden="true">{userInitials}</span>
+            {!showCollapsed && (
+              <div className="app-identity-card__body">
+                <strong>{userLabel}</strong>
+                <span>{roleLabel}</span>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="app-rail__logout"
+            onClick={() => void onLogout()}
+            title={showCollapsed ? t("Abmelden", "Cerrar sesión") : undefined}
+            aria-label={showCollapsed ? t("Abmelden", "Cerrar sesión") : undefined}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="app-rail__logout-icon">
+              <path d="M15 3.5h3a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-3" />
+              <path d="M10 17l5-5-5-5" />
+              <path d="M15 12H3" />
+            </svg>
+            {!showCollapsed && <span>{t("Abmelden", "Cerrar sesión")}</span>}
+          </button>
+        </div>
+      </>
+    );
+  };
 
   return (
-    <div className="app-shell">
-      <aside className="app-rail">{railContent}</aside>
+    <div className={isCollapsed ? "app-shell app-shell--rail-collapsed" : "app-shell"}>
+      <aside className={isCollapsed ? "app-rail app-rail--collapsed" : "app-rail"}>{renderRail("desktop")}</aside>
 
       <div
         className={isMobileNavOpen ? "app-drawer app-drawer--open" : "app-drawer"}
@@ -223,7 +295,7 @@ export const AppShell = ({
               <span aria-hidden="true">×</span>
             </button>
           </div>
-          <div className="app-drawer__body">{railContent}</div>
+          <div className="app-drawer__body">{renderRail("drawer")}</div>
         </aside>
       </div>
 

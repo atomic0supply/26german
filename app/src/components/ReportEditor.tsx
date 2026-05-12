@@ -1,4 +1,5 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Camera, CheckCircle2, FileText, History, Save, Sparkles, Users } from "lucide-react";
 import {
   collection,
   doc,
@@ -27,16 +28,22 @@ import { db, functions, storage } from "../firebase";
 import { Language, localeForLanguage, translate } from "../i18n";
 import { getCallableErrorMessage } from "../lib/callableErrors";
 import { normalizeReportData } from "../lib/firestore";
+import { useReportDraftBackup } from "../lib/useReportDraftBackup";
+import { useCompanyLogoUrls } from "../lib/useCompanyLogoUrls";
 import { validateReportForFinalize } from "../lib/validation";
 import { ClientData, CompanyId, FinalizeReportResult, PartnerData, ReportData, ReportPhoto } from "../types";
 import { PhotoAnnotation, PhotoAnnotatorLite } from "./PhotoAnnotatorLite";
 import { TemplateDrivenReportEditor } from "./TemplateDrivenReportEditor";
 import { ActionBar } from "./ui/ActionBar";
+import { CommandPalette, CommandPaletteItem } from "./ui/CommandPalette";
+import { Dialog } from "./ui/Dialog";
 import { EmptyState } from "./ui/EmptyState";
 import { ProgressStepper } from "./ui/ProgressStepper";
+import { SaveStatusBadge } from "./ui/SaveStatusBadge";
 import { SectionCard } from "./ui/SectionCard";
 import { SkeletonBlock } from "./ui/SkeletonBlock";
 import { StatusChip } from "./ui/StatusChip";
+import { Toast, ToastMessage } from "./ui/Toast";
 
 interface ReportEditorProps {
   reportId: string;
@@ -262,6 +269,43 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const canSendEmail = Boolean(report && (canEditReport || userRole === "admin" || userRole === "office"));
   const canMutateDraft = Boolean(report && canEditReport && report.status === "draft");
 
+  // Backup local del borrador → red de seguridad si el técnico se queda offline o cierra la pestaña
+  const draftBackupEnabled = canMutateDraft;
+  const {
+    hasRecoverableDraft,
+    recoverableDraft,
+    restore: restoreDraft,
+    discard: discardDraft,
+    markSynced: markDraftSynced,
+  } = useReportDraftBackup(reportId, report, draftBackupEnabled);
+
+  // URLs precargadas de los logos de empresas para mostrarlos en las cards
+  const companyLogoUrls = useCompanyLogoUrls();
+
+  // Modales: finalizar
+  const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
+  const [finalizePreviewSeen, setFinalizePreviewSeen] = useState(false);
+
+  // Comando-K palette + transient toasts (auto-advance, save flashes, etc.)
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const pushToast = useCallback((tone: ToastMessage["tone"], text: string) => {
+    setToasts((prev) => [...prev, { id: crypto.randomUUID(), tone, text }]);
+  }, []);
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }, []);
+
+  // Auto-advance preference, persisted per user
+  const AUTO_ADVANCE_KEY = "reportEditor:autoAdvance";
+  const [autoAdvanceEnabled, setAutoAdvanceEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem(AUTO_ADVANCE_KEY) !== "0";
+  });
+  useEffect(() => {
+    window.localStorage.setItem(AUTO_ADVANCE_KEY, autoAdvanceEnabled ? "1" : "0");
+  }, [autoAdvanceEnabled]);
+
   const persistReport = async (showNotice = false) => {
     if (!report || !canEditReport || !isOnline || saving || report.status === "finalized") {
       return null;
@@ -291,6 +335,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       setLastSavedAt(new Date().toISOString());
       lastPersistedFingerprintRef.current = reportFingerprint(next);
       setSaveState("saved");
+      // Limpiar el backup local: ya tenemos los cambios en Firestore
+      markDraftSynced();
       if (showNotice) {
         setNotice(t("Cambios guardados.", "Änderungen gespeichert."));
       }
@@ -333,6 +379,60 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
       }
     };
   }, [canEditReport, isOnline, report, saving]);
+
+  // Cola offline: cuando el usuario recupera conexión y tiene cambios sin guardar,
+  // hace flush inmediato a Firestore. Es complementario al backup en localStorage:
+  // el local protege contra cerrar la pestaña offline; este flush sincroniza al volver.
+  const wasOnlineRef = useRef<boolean>(isOnline);
+  useEffect(() => {
+    const wasOnline = wasOnlineRef.current;
+    wasOnlineRef.current = isOnline;
+    if (!wasOnline && isOnline && saveState === "dirty" && !saving) {
+      // pequeña espera para que terminen otros side-effects de reconexión
+      const id = window.setTimeout(() => void persistReport(true), 200);
+      return () => window.clearTimeout(id);
+    }
+  }, [isOnline, saveState, saving]);
+
+  // Atajos de teclado (desktop): Ctrl/Cmd+S guarda; Ctrl/Cmd+←/→ navega pasos.
+  // En móvil sin teclado físico no afecta. Ignora cuando el foco está dentro de un
+  // input editable y no se pulsa el modificador (evita romper navegación normal).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const cmd = event.metaKey || event.ctrlKey;
+      if (!cmd) return;
+
+      // Cmd/Ctrl+K → command palette
+      if (event.key === "k" || event.key === "K") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+
+      // Cmd/Ctrl+S → guardar
+      if (event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        if (isOnline && !saving && canEditReport) {
+          void persistReport(true);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+← / Cmd/Ctrl+→ → paso anterior / siguiente
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        goStep(-1);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        if (activeStep !== "review") goStep(1);
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeStep, isOnline, saving, canEditReport]);
 
   useEffect(() => {
     if (!notice) return;
@@ -564,11 +664,20 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
     }
   };
 
-  const finalizeReport = async () => {
+  // Abrir el modal de confirmación. La acción real ocurre en `confirmFinalize` tras el preview gate.
+  const requestFinalize = () => {
     if (!canEditReport) {
       setError(t("Solo el creador del informe puede finalizarlo.", "Nur der Ersteller kann den Bericht finalisieren."));
       return;
     }
+    setFinalizePreviewSeen(Boolean(previewUrl)); // si ya hay preview, no hace falta volver a pedirlo
+    setFinalizeDialogOpen(true);
+  };
+
+  const confirmFinalize = async () => {
+    if (!canEditReport) return;
+    setFinalizeDialogOpen(false);
+
     const persisted = await persistReport(false);
     if (!persisted) {
       return;
@@ -672,6 +781,36 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
   const canJumpToStep = (step: StepId) => step === activeStep || !isStepBlocked(step);
   const canAdvance = activeStep !== "review" && currentStepComplete(activeStep);
   const nextIncompleteStep = STEPS.find((step) => !currentStepComplete(step));
+
+  // Devuelve los campos pendientes para completar un paso (legibles para el usuario).
+  // Se usa en el sidebar (Ablaufstatus) y en el footer (motivo de bloqueo).
+  const stepMissingFields = (step: StepId): string[] => {
+    if (!report) return [];
+    switch (step) {
+      case "recipient":
+        return [];
+      case "client": {
+        const missing: string[] = [];
+        if (!report.clientId) missing.push(t("Kunde", "Cliente"));
+        if (!report.projectInfo.locationObject.trim()) missing.push(t("Messort / Objekt", "Ubicación / objeto"));
+        return missing;
+      }
+      case "technical": {
+        const missing: string[] = [];
+        if (!report.projectInfo.projectNumber.trim()) missing.push(t("Projektnummer", "Número de proyecto"));
+        if (!report.projectInfo.technicianName.trim()) missing.push(t("Messtechniker", "Técnico"));
+        return missing;
+      }
+      case "photos":
+        return report.photos.length === 0 ? [t("Mindestens ein Foto", "Al menos una foto")] : [];
+      case "review":
+        return validationErrors;
+      default:
+        return [];
+    }
+  };
+
+  const activeStepMissing = stepMissingFields(activeStep);
   const lastSavedLabel = saveState === "saving"
     ? t("Guardando ahora…", "Speichert gerade…")
     : saveState === "dirty"
@@ -687,6 +826,45 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
     const nextIndex = Math.min(STEPS.length - 1, Math.max(0, stepIndex(activeStep) + direction));
     setActiveStep(STEPS[nextIndex]);
   };
+
+  // Auto-advance: when the user completes the active step's required fields,
+  // glide to the next step after a short idle (so transient valid-then-edit
+  // states don't fire). Skipped on the review step and when the user opts out.
+  const previousStepCompleteRef = useRef<boolean>(false);
+  const userInteractedRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!initializedRef.current) return;
+    if (lastPersistedFingerprintRef.current && report && reportFingerprint(report) !== lastPersistedFingerprintRef.current) {
+      userInteractedRef.current = true;
+    }
+  }, [report]);
+  useEffect(() => {
+    // Reset transition tracking when step changes manually.
+    previousStepCompleteRef.current = currentStepComplete(activeStep);
+  }, [activeStep]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!autoAdvanceEnabled || !canEditReport || !report) return;
+    if (activeStep === "review") return;
+    const complete = currentStepComplete(activeStep);
+    const wasComplete = previousStepCompleteRef.current;
+    previousStepCompleteRef.current = complete;
+    if (!complete || wasComplete) return;
+    if (!userInteractedRef.current) return;
+    const idx = stepIndex(activeStep);
+    const nextStep = STEPS[idx + 1];
+    if (!nextStep) return;
+    const timer = window.setTimeout(() => {
+      setActiveStep(nextStep);
+      pushToast(
+        "celebrate",
+        t(
+          `Auto-advanced: ${getStepText(nextStep, language)}`,
+          `Avanzaste a: ${getStepText(nextStep, language)}`
+        )
+      );
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [report, activeStep, autoAdvanceEnabled, canEditReport, language, pushToast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
@@ -724,43 +902,72 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
 
   return (
     <main className="report-flow-shell">
-      <section className="report-flow-hero">
-        <div className="report-flow-hero__copy">
-          <button type="button" className="ghost" onClick={onBack}>
-            {t("Volver", "Zurück")}
-          </button>
-          <span className="report-flow-hero__eyebrow">{t("Informe guiado", "Geführter Bericht")}</span>
-          <h1>{report.projectInfo.projectNumber || t("Nuevo informe", "Neuer Bericht")}</h1>
-          <p>{resolveReportTemplateName(language, report.templateName)} · {report.projectInfo.locationObject || t("Ubicación pendiente", "Ort ausstehend")}</p>
-          <div className="report-flow-hero__meta">
-            <small>{lastSavedLabel}</small>
-            {nextIncompleteStep && (
-              <small>
-                {t("Siguiente foco", "Nächster Fokus")}: {getStepText(nextIncompleteStep, language)}
-              </small>
-            )}
+      <header className="report-flow-hero report-flow-hero--compact">
+        <button type="button" className="ghost report-flow-hero__back" onClick={onBack} aria-label={t("Volver", "Zurück")}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          <span className="report-flow-hero__back-label">{t("Volver", "Zurück")}</span>
+        </button>
+        <h1 className="report-flow-hero__title">
+          {report.projectInfo.projectNumber || t("Nuevo informe", "Neuer Bericht")}
+        </h1>
+        <span className="report-flow-hero__sep" aria-hidden="true">·</span>
+        <span className="report-flow-hero__sub">
+          {report.projectInfo.locationObject || t("Ubicación pendiente", "Ort ausstehend")}
+        </span>
+        <span className="report-flow-hero__sub report-flow-hero__sub--muted">
+          {resolveReportTemplateName(language, report.templateName)}
+        </span>
+        <div className="report-flow-hero__chips">
+          <StatusChip tone={report.status === "finalized" ? "success" : "warning"}>
+            {report.status === "finalized" ? t("Final", "Final") : t("Entwurf", "Borrador")}
+          </StatusChip>
+        </div>
+      </header>
+
+      {hasRecoverableDraft && recoverableDraft && (
+        <div className="draft-recovery-banner" role="status" aria-live="polite">
+          <span className="draft-recovery-banner__icon">
+            <History size={16} aria-hidden="true" />
+          </span>
+          <div className="draft-recovery-banner__copy">
+            <strong>{t("Cambios sin sincronizar disponibles", "Nicht synchronisierte Änderungen verfügbar")}</strong>
+            <small>
+              {t(
+                `Copia local de hace ${Math.max(1, Math.round((Date.now() - Date.parse(recoverableDraft.savedAt)) / 60000))} min.`,
+                `Lokale Kopie vor ${Math.max(1, Math.round((Date.now() - Date.parse(recoverableDraft.savedAt)) / 60000))} Min.`
+              )}
+            </small>
+          </div>
+          <div className="draft-recovery-banner__actions">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                discardDraft();
+                pushToast("info", t("Versión local descartada.", "Lokale Version verworfen."));
+              }}
+            >
+              {t("Descartar", "Verwerfen")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const restored = restoreDraft();
+                if (restored) {
+                  setReport(restored);
+                  setSaveState("dirty");
+                  pushToast("success", t("Borrador local restaurado.", "Lokaler Entwurf wiederhergestellt."));
+                }
+              }}
+            >
+              {t("Restaurar", "Wiederherstellen")}
+            </button>
           </div>
         </div>
-        <div className="report-flow-hero__status">
-          <StatusChip tone={report.status === "finalized" ? "success" : "warning"}>
-            {report.status === "finalized" ? t("Finalizado", "Finalisiert") : t("Borrador activo", "Aktiver Entwurf")}
-          </StatusChip>
-          <StatusChip tone={isOnline ? "success" : "danger"}>
-            {isOnline ? t("Conexión activa", "Online") : t("Sin conexión", "Offline")}
-          </StatusChip>
-          <StatusChip tone={saveState === "saved" ? "success" : saveState === "saving" ? "info" : saveState === "dirty" ? "warning" : "neutral"}>
-            {saveState === "saved"
-              ? t("Guardado", "Gespeichert")
-              : saveState === "saving"
-                ? t("Guardando", "Speichert")
-                : saveState === "dirty"
-                  ? t("Cambios pendientes", "Ungespeicherte Änderungen")
-                  : t("Sin cambios", "Keine Änderungen")}
-          </StatusChip>
-        </div>
-      </section>
+      )}
 
-      <ProgressStepper
+      <div className="report-flow-stepper-row">
+        <ProgressStepper
         steps={STEPS.map((step) => ({
           id: step,
           label: getStepText(step, language),
@@ -775,6 +982,18 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
           }
         }}
       />
+        {canEditReport && report.status !== "finalized" && (
+          <label className="auto-advance-toggle" title={t("Avanzar automáticamente cuando un paso esté completo", "Automatisch weiterspringen, wenn ein Schritt vollständig ist")}>
+            <input
+              type="checkbox"
+              checked={autoAdvanceEnabled}
+              onChange={(e) => setAutoAdvanceEnabled(e.target.checked)}
+            />
+            <Sparkles size={12} aria-hidden="true" />
+            <span>{t("Auto-Weiter", "Auto-avance")}</span>
+          </label>
+        )}
+      </div>
 
       {error && <p className="notice-banner error">{error}</p>}
       {notice && <p className="notice-banner notice">{notice}</p>}
@@ -795,6 +1014,17 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         </p>
       )}
 
+      {canEditReport && report.status !== "finalized" && (
+        <SaveStatusBadge
+          state={saveState}
+          lastSavedAt={lastSavedAt}
+          errorMessage={error && saveState === "dirty" ? error : undefined}
+          language={language}
+          isOnline={isOnline}
+          onRetry={() => void persistReport(true)}
+        />
+      )}
+
       <section className="report-flow-layout">
         <div className="report-flow-main">
           {activeStep === "recipient" && (
@@ -804,23 +1034,35 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
               description={t("Si quieres, elige la marca que debe aparecer en la parte superior del PDF.", "Optional kann hier die Marke gewählt werden, die oben im PDF erscheinen soll.")}
             >
               <div className="company-grid">
-                {COMPANY_OPTIONS.map((company) => (
-                  <button
-                    key={company.id}
-                    type="button"
-                    className={report.companyId === company.id ? "company-card active" : "company-card"}
-                    disabled={!canMutateDraft}
-                    onClick={() =>
-                      updateReport((previous) => ({
-                        ...previous,
-                        companyId: company.id
-                      }))
-                    }
-                  >
-                    <strong>{company.name}</strong>
-                    <span>{company.logoStoragePath}</span>
-                  </button>
-                ))}
+                {COMPANY_OPTIONS.map((company) => {
+                  const logoUrl = companyLogoUrls[company.id];
+                  const active = report.companyId === company.id;
+                  return (
+                    <button
+                      key={company.id}
+                      type="button"
+                      className={`company-card${active ? " company-card--active" : ""}${!logoUrl ? " company-card--no-logo" : ""}`}
+                      disabled={!canMutateDraft}
+                      aria-pressed={active}
+                      onClick={() =>
+                        updateReport((previous) => ({
+                          ...previous,
+                          companyId: company.id
+                        }))
+                      }
+                    >
+                      <div className="company-card__logo" aria-hidden="true">
+                        {logoUrl ? (
+                          <img src={logoUrl} alt="" loading="lazy" />
+                        ) : (
+                          <span className="company-card__initial">{company.name.charAt(0)}</span>
+                        )}
+                      </div>
+                      <strong className="company-card__name">{company.name}</strong>
+                      {active && <span className="company-card__check" aria-hidden="true">✓</span>}
+                    </button>
+                  );
+                })}
               </div>
             </SectionCard>
           )}
@@ -1548,8 +1790,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                         }))
                       }
                       placeholder={t(
-                        "Beschreibe den Einsatz: Situation, Untersuchung, Maßnahmen und Empfehlungen.",
-                        "Describe la intervención: situación, inspección, medidas y recomendaciones."
+                        "Describe la intervención: situación, inspección, medidas y recomendaciones.",
+                        "Beschreibe den Einsatz: Situation, Untersuchung, Maßnahmen und Empfehlungen."
                       )}
                     />
                   </label>
@@ -1561,8 +1803,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       onClick={() => runEinsatzberichtAi("generate")}
                     >
                       {einsatzAiMode === "generate"
-                        ? t("Generierend…", "Generando…")
-                        : t("KI: Bericht generieren", "IA: Generar informe")}
+                        ? t("Generando…", "Generierend…")
+                        : t("IA: Generar informe", "KI: Bericht generieren")}
                     </button>
                     <button
                       type="button"
@@ -1571,8 +1813,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       onClick={() => runEinsatzberichtAi("improve")}
                     >
                       {einsatzAiMode === "improve"
-                        ? t("Verbessernd…", "Mejorando…")
-                        : t("KI: Text verbessern", "IA: Mejorar texto")}
+                        ? t("Mejorando…", "Verbessernd…")
+                        : t("IA: Mejorar texto", "KI: Text verbessern")}
                     </button>
                     <button
                       type="button"
@@ -1581,8 +1823,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       onClick={() => runEinsatzberichtAi("professional")}
                     >
                       {einsatzAiMode === "professional"
-                        ? t("Umschreibend…", "Reescribiendo…")
-                        : t("KI: Professionell umschreiben", "IA: Reescribir profesional")}
+                        ? t("Reescribiendo…", "Umschreibend…")
+                        : t("IA: Reescribir profesional", "KI: Professionell umschreiben")}
                     </button>
                     <button
                       type="button"
@@ -1591,8 +1833,8 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                       onClick={() => runEinsatzberichtAi("structure")}
                     >
                       {einsatzAiMode === "structure"
-                        ? t("Strukturierend…", "Estructurando…")
-                        : t("KI: Als technischer Bericht strukturieren", "IA: Estructurar como informe técnico")}
+                        ? t("Estructurando…", "Strukturierend…")
+                        : t("IA: Estructurar como informe técnico", "KI: Als technischer Bericht strukturieren")}
                     </button>
                   </div>
                   {einsatzAiError && (
@@ -1731,6 +1973,7 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                 <div className="photo-grid">
                   {PHOTO_SLOTS.map((slot) => {
                     const photo = report.photos.find((item) => item.slot === slot);
+                    const hasDoc = Boolean(photo?.documentation?.trim());
                     return (
                       <button
                         key={slot}
@@ -1741,13 +1984,25 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                           photo?.downloadUrl ? "photo-tile--filled" : ""
                         ].filter(Boolean).join(" ")}
                         onClick={() => setActivePhotoSlot(slot)}
-                        title={`Foto ${slot}`}
+                        title={photo?.downloadUrl
+                          ? t(`Foto ${slot} – bearbeiten`, `Foto ${slot} – editar`)
+                          : t(`Slot ${slot} – hochladen`, `Slot ${slot} – subir`)}
                       >
                         {photo?.downloadUrl ? (
-                          <img src={photo.downloadUrl} alt="" className="photo-tile__thumb" />
+                          <>
+                            <img src={photo.downloadUrl} alt="" className="photo-tile__thumb" />
+                            <span className="photo-tile__badge">{slot}</span>
+                            {hasDoc && <span className="photo-tile__doc-flag" aria-label="Doc OK">✓</span>}
+                          </>
                         ) : (
                           <div className="photo-tile__empty">
+                            <svg className="photo-tile__icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                              <rect x="3" y="6" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                              <circle cx="12" cy="12.5" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                              <path d="M8 6l1.2-2h5.6L16 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                            </svg>
                             <span className="photo-tile__num">{slot}</span>
+                            <span className="photo-tile__hint">{t("Tippen", "Subir")}</span>
                           </div>
                         )}
                       </button>
@@ -1831,6 +2086,21 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
               eyebrow={t("Paso 6", "Schritt 6")}
               description={t("Comprueba el estado del informe, genera la vista previa y envía el PDF al cliente.", "Prüfe den Bericht, generiere die Vorschau und sende das PDF an den Kunden.")}
             >
+              {report.status !== "finalized" && validationErrors.length > 0 && (
+                <div className="review-banner review-banner--error" role="alert">
+                  <span className="review-banner__title">
+                    {t(
+                      `Hay ${validationErrors.length} ${validationErrors.length === 1 ? "problema" : "problemas"} que impide${validationErrors.length === 1 ? "" : "n"} finalizar:`,
+                      `${validationErrors.length} ${validationErrors.length === 1 ? "Problem" : "Probleme"} verhindern${validationErrors.length === 1 ? "" : ""} die Finalisierung:`
+                    )}
+                  </span>
+                  <ul className="review-banner__list">
+                    {validationErrors.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div className="review-grid">
                 <div className="review-grid__summary">
                   <div className="metric-grid metric-grid--compact">
@@ -1890,36 +2160,54 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
         </div>
 
         <aside className="report-flow-side">
-          <SectionCard
-            title={t("Estado del flujo", "Ablaufstatus")}
-            eyebrow={t("Checklist", "Checkliste")}
-            description={t("Cada paso deja claro si está listo, en curso o bloqueado por información anterior.", "Jeder Schritt zeigt klar, ob er bereit, aktiv oder durch frühere Angaben blockiert ist.")}
-          >
-            <div className="flow-status-list">
-              {STEPS.map((step) => (
-                <div key={step} className={`flow-status-item flow-status-item--${currentStepState(step)}`}>
-                  <span>{getStepText(step, language)}</span>
-                  <StatusChip tone={
-                    currentStepState(step) === "done"
-                      ? "success"
-                      : currentStepState(step) === "active"
-                        ? "info"
-                        : currentStepState(step) === "blocked"
-                          ? "danger"
-                          : "warning"
-                  }>
-                    {currentStepState(step) === "done"
-                      ? t("Listo", "Bereit")
-                      : currentStepState(step) === "active"
-                        ? t("En curso", "Aktiv")
-                        : currentStepState(step) === "blocked"
-                          ? t("Bloqueado", "Blockiert")
-                          : t("Pendiente", "Offen")}
-                  </StatusChip>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
+          <div className="flow-status-card">
+            <span className="flow-status-card__eyebrow">{t("Checkliste", "Checklist")}</span>
+            <h3 className="flow-status-card__title">{t("Ablaufstatus", "Estado del flujo")}</h3>
+
+            <ol className="flow-status-list">
+              {STEPS.map((step) => {
+                const state = currentStepState(step);
+                const isActive = state === "active";
+                const missing = isActive ? activeStepMissing : [];
+                return (
+                  <li key={step} className={`flow-status-item flow-status-item--${state}`}>
+                    <button
+                      type="button"
+                      className="flow-status-item__row"
+                      disabled={!canJumpToStep(step)}
+                      onClick={() => canJumpToStep(step) && setActiveStep(step)}
+                    >
+                      <span className="flow-status-item__dot" aria-hidden="true" />
+                      <span className="flow-status-item__label">{getStepText(step, language)}</span>
+                      <span className={`flow-status-item__chip flow-status-item__chip--${state}`}>
+                        {state === "done"     ? t("Bereit", "Listo") :
+                         state === "active"   ? t("Aktiv", "En curso") :
+                         state === "blocked"  ? t("Blockiert", "Bloqueado") :
+                                                t("Offen", "Pendiente")}
+                      </span>
+                    </button>
+                    {isActive && missing.length > 0 && (
+                      <div className="flow-status-item__missing">
+                        <strong>{t("Noch fehlt:", "Aún falta:")}</strong>
+                        <ul>
+                          {missing.slice(0, 4).map((m) => <li key={m}>{m}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+
+            {nextIncompleteStep && activeStepMissing.length > 0 && (
+              <p className="flow-status-card__next">
+                {t(
+                  `Vervollständige ${activeStepMissing.slice(0, 2).join(" und ")}, um den nächsten Schritt freizuschalten.`,
+                  `Completa ${activeStepMissing.slice(0, 2).join(" y ")} para desbloquear el siguiente paso.`
+                )}
+              </p>
+            )}
+          </div>
         </aside>
       </section>
 
@@ -1946,8 +2234,17 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
                   {t("Enviar PDF", "PDF senden")}
                 </button>
               ) : (
-                <button type="button" disabled={!isOnline || saving || !canMutateDraft} onClick={() => void finalizeReport()}>
-                  {t("Finalizar PDF", "PDF finalisieren")}
+                <button
+                  type="button"
+                  disabled={!isOnline || saving || !canMutateDraft || validationErrors.length > 0}
+                  onClick={() => requestFinalize()}
+                >
+                  {validationErrors.length > 0
+                    ? t(
+                        `Finalizar (${validationErrors.length} ${validationErrors.length === 1 ? "problema pendiente" : "problemas pendientes"})`,
+                        `Finalisieren (${validationErrors.length} ${validationErrors.length === 1 ? "Problem offen" : "Probleme offen"})`
+                      )
+                    : t("Finalizar PDF", "PDF finalisieren")}
                 </button>
               )}
               <button
@@ -1960,9 +2257,16 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
               </button>
             </>
           ) : (
-            <button type="button" disabled={!canAdvance} onClick={() => goStep(1)}>
-              {canAdvance ? t("Siguiente paso", "Nächster Schritt") : t("Completa este paso", "Diesen Schritt abschließen")}
-            </button>
+            <div className="action-bar__primary-stack">
+              <button type="button" disabled={!canAdvance} onClick={() => goStep(1)}>
+                {canAdvance ? t("Nächster Schritt", "Siguiente paso") : t("Diesen Schritt abschließen", "Completa este paso")}
+              </button>
+              {!canAdvance && activeStepMissing.length > 0 && (
+                <small className="action-bar__missing">
+                  {t("Es fehlt: ", "Falta: ")}{activeStepMissing.join(", ")}
+                </small>
+              )}
+            </div>
           )
         }
         aside={
@@ -1972,6 +2276,152 @@ export const ReportEditor = ({ reportId, uid, userRole, isOnline, language, onBa
           </div>
         }
       />
+
+      {/* Dialog: confirmación antes de Finalizar (con preview gate) */}
+      <Dialog
+        open={finalizeDialogOpen}
+        title={t("¿Finalizar este informe?", "Diesen Bericht finalisieren?")}
+        description={t(
+          "Una vez finalizado, el informe se bloquea para edición y se genera el PDF definitivo. Esta acción no se puede deshacer.",
+          "Nach der Finalisierung wird der Bericht für die Bearbeitung gesperrt und das endgültige PDF erstellt. Diese Aktion kann nicht rückgängig gemacht werden."
+        )}
+        onClose={() => setFinalizeDialogOpen(false)}
+        size="wide"
+        footer={
+          <div className="finalize-actions">
+            <button type="button" className="ghost" onClick={() => setFinalizeDialogOpen(false)}>
+              {t("Cancelar", "Abbrechen")}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={previewLoading || !isOnline}
+              onClick={async () => {
+                await previewPdf();
+                setFinalizePreviewSeen(true);
+              }}
+            >
+              {previewLoading
+                ? t("Generando preview...", "Vorschau wird erstellt...")
+                : finalizePreviewSeen
+                  ? t("Volver a generar previsualización", "Vorschau erneut erzeugen")
+                  : t("Ver previsualización del PDF", "PDF-Vorschau anzeigen")}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!finalizePreviewSeen || !isOnline || saving}
+              onClick={() => void confirmFinalize()}
+            >
+              {t("Confirmar y generar PDF", "Bestätigen und PDF erzeugen")}
+            </button>
+          </div>
+        }
+      >
+        <div className="finalize-warning">
+          {finalizePreviewSeen
+            ? t(
+                "✓ Has revisado la previsualización. Confirma para generar el PDF definitivo.",
+                "✓ Du hast die Vorschau geprüft. Bestätige, um das endgültige PDF zu erzeugen."
+              )
+            : t(
+                "Antes de continuar revisa la previsualización del PDF pulsando el botón abajo.",
+                "Bitte überprüfe vor dem Fortfahren die PDF-Vorschau über den Button unten."
+              )}
+        </div>
+        <dl className="finalize-checklist">
+          <dt>{t("Número de proyecto", "Projektnummer")}</dt>
+          <dd className={report?.projectInfo.projectNumber ? "" : "is-missing"}>
+            {report?.projectInfo.projectNumber || t("(falta)", "(fehlt)")}
+          </dd>
+
+          <dt>{t("Partner / Firma (Kunde)", "Partner / Firma (Kunde)")}</dt>
+          <dd className={report?.partner?.name ? "" : "is-missing"}>
+            {report?.partner?.name || t("(sin partner)", "(kein Partner)")}
+          </dd>
+
+          <dt>{t("Cliente (MessortObjekt)", "Kunde (MessortObjekt)")}</dt>
+          <dd className={report?.contacts.name1 ? "" : "is-missing"}>
+            {report?.contacts.name1 || t("(falta)", "(fehlt)")}
+          </dd>
+
+          <dt>{t("Técnico", "Techniker")}</dt>
+          <dd className={report?.projectInfo.technicianName ? "" : "is-missing"}>
+            {report?.projectInfo.technicianName || t("(falta)", "(fehlt)")}
+          </dd>
+
+          <dt>{t("Fecha visita", "Messtermin")}</dt>
+          <dd className={report?.projectInfo.appointmentDate ? "" : "is-missing"}>
+            {report?.projectInfo.appointmentDate
+              ? new Date(report.projectInfo.appointmentDate).toLocaleString(locale)
+              : t("(falta)", "(fehlt)")}
+          </dd>
+
+          <dt>{t("Fotos", "Fotos")}</dt>
+          <dd>{report?.photos.length ?? 0}</dd>
+
+          <dt>{t("Firma técnico", "Unterschrift Techniker")}</dt>
+          <dd className={report?.signature?.dataUrl || report?.signature?.downloadUrl ? "" : "is-missing"}>
+            {report?.signature?.dataUrl || report?.signature?.downloadUrl ? "✓" : t("(falta)", "(fehlt)")}
+          </dd>
+        </dl>
+      </Dialog>
+
+      <div className="shortcut-hints" aria-hidden="true">
+        <span className="shortcut-hints__item"><kbd>⌘</kbd><kbd>K</kbd> {t("Comandos", "Befehle")}</span>
+        <span className="shortcut-hints__item"><kbd>⌘</kbd><kbd>S</kbd> {t("Guardar", "Speichern")}</span>
+        <span className="shortcut-hints__item"><kbd>⌘</kbd><kbd>←</kbd>/<kbd>→</kbd> {t("Cambiar paso", "Schritt wechseln")}</span>
+        <span className="shortcut-hints__item"><kbd>Esc</kbd> {t("Cerrar diálogo", "Dialog schließen")}</span>
+      </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        placeholder={t("Buscar acción o paso…", "Aktion oder Schritt suchen…")}
+        items={[
+          ...STEPS.map<CommandPaletteItem>((step, index) => ({
+            id: `step-${step}`,
+            label: t(`Ir al paso: ${getStepText(step, language)}`, `Zum Schritt: ${getStepText(step, language)}`),
+            group: t("Navegación", "Navigation"),
+            hint: `⌘ ${index + 1}`,
+            icon: step === "client" ? <Users size={14} /> : step === "photos" ? <Camera size={14} /> : step === "review" ? <CheckCircle2 size={14} /> : <FileText size={14} />,
+            onRun: () => {
+              if (canJumpToStep(step)) setActiveStep(step);
+            },
+          })),
+          {
+            id: "save",
+            label: t("Guardar ahora", "Jetzt speichern"),
+            group: t("Acciones", "Aktionen"),
+            hint: "⌘S",
+            icon: <Save size={14} />,
+            onRun: () => { void persistReport(true); },
+          },
+          {
+            id: "preview",
+            label: t("Generar previsualización PDF", "PDF-Vorschau erzeugen"),
+            group: t("Acciones", "Aktionen"),
+            icon: <FileText size={14} />,
+            onRun: () => { void previewPdf(); },
+          },
+          {
+            id: "finalize",
+            label: t("Finalizar informe…", "Bericht finalisieren…"),
+            group: t("Acciones", "Aktionen"),
+            icon: <CheckCircle2 size={14} />,
+            onRun: () => requestFinalize(),
+          },
+          {
+            id: "back",
+            label: t("Volver al panel", "Zurück zur Übersicht"),
+            group: t("Navegación", "Navigation"),
+            icon: <ArrowLeft size={14} />,
+            onRun: () => onBack(),
+          },
+        ]}
+      />
+
+      <Toast messages={toasts} onDismiss={dismissToast} />
     </main>
   );
 };

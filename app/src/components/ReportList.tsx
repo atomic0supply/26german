@@ -19,7 +19,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db } from "../firebase";
 import { functions } from "../firebase";
 import { COMPANY_OPTIONS, REPORT_TEMPLATE, resolveReportTemplateName } from "../constants";
-import { defaultUserLabel, Language, localeForLanguage, translate } from "../i18n";
+import { createTranslator, defaultUserLabel, Language, localeForLanguage } from "../i18n";
 import { createDefaultReport } from "../lib/defaultReport";
 import { toIsoString } from "../lib/firestore";
 import { ClientData, CompanyId, BrandingConfig, ReportListItem, TemplateSummary, UserRole } from "../types";
@@ -59,11 +59,13 @@ const buildVisitItems = (reports: ReportListItem[], clients: ClientData[], userL
       const client = report.clientId ? clientMap.get(report.clientId) : undefined;
       const hasSavedReport = report.status === "finalized"
         || (report.createdAt ? report.updatedAt.localeCompare(report.createdAt) > 0 : false);
+      const contactName = client?.principalContact?.trim() || getClientFullName(client);
       return {
         id: `visit-${report.id}`,
         title: getClientFullName(client) || report.projectNumber || "Visit",
         address: report.objectLabel || client?.location || "",
-        clientLabel: client ? [client.principalContact, client.email].filter(Boolean).join(" · ") : "",
+        clientLabel: contactName,
+        clientEmail: client?.email || "",
         technician: report.technicianName || userLabel,
         when: report.appointmentDate || new Date().toISOString(),
         durationMinutes: report.visitDurationMinutes,
@@ -111,23 +113,44 @@ const ReportsWorkspace = ({
   onOpenReport: (id: string) => void;
   onDeleteReport: (item: ReportListItem) => void;
 }) => {
-  const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
   const locale = localeForLanguage(language);
   const canDeleteOthers = userRole === "admin" || userRole === "office";
   const selectedTemplate = templates.find((item) => item.id === selectedTemplateId);
   const devMode = localStorage.getItem("leakops_dev_mode") === "true";
 
+  // Búsqueda + filtro de estado (client-side, sin tocar backend)
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "finalized">("all");
+
+  const filteredReports = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return reports.filter((item) => {
+      if (statusFilter !== "all" && item.status !== statusFilter) return false;
+      if (!needle) return true;
+      const haystack = [
+        item.projectNumber,
+        item.objectLabel,
+        item.technicianName ?? "",
+        item.createdByEmail ?? "",
+        item.createdByLabel ?? "",
+        item.templateName ?? ""
+      ].join(" ").toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [reports, search, statusFilter]);
+
   return (
     <div className="workspace-stack">
       <SectionCard
-        title={t("Nuevo informe", "Neuer Bericht")}
-        eyebrow={t("Acción principal", "Schnellstart")}
-        description={t("Empieza un informe con la empresa ya seleccionada.", "Starte einen Bericht mit bereits ausgewähltem Unternehmen.")}
+        title={t("Neuer Bericht", "Nuevo informe")}
+        eyebrow={t("Schnellstart", "Acción principal")}
+        description={t("Starte einen Bericht mit bereits ausgewähltem Unternehmen.", "Empieza un informe con la empresa ya seleccionada.")}
       >
         <div className="report-launchpad">
           {devMode && (
             <label>
-              {t("Plantilla PDF", "PDF-Vorlage")}
+              {t("PDF-Vorlage", "Plantilla PDF")}
               <select value={selectedTemplateId} onChange={(event) => onTemplateChange(event.target.value)} disabled={templatesLoading}>
                 <option value={REPORT_TEMPLATE.id}>{resolveReportTemplateName(language, REPORT_TEMPLATE.name)}</option>
                 {templates.map((template) => (
@@ -140,9 +163,9 @@ const ReportsWorkspace = ({
           )}
 
           <label>
-            {t("Empresa / logo", "Unternehmen / Logo")}
+            {t("Unternehmen / Logo", "Empresa / logo")}
             <select value={companyId} onChange={(event) => onCompanyChange(event.target.value as CompanyId | "")}>
-              <option value="">{t("Sin logo específico", "Kein spezielles Logo")}</option>
+              <option value="">{t("Kein spezielles Logo", "Sin logo específico")}</option>
               {COMPANY_OPTIONS.map((company) => (
                 <option key={company.id} value={company.id}>
                   {company.name}
@@ -156,35 +179,97 @@ const ReportsWorkspace = ({
               <strong>{selectedTemplate?.name ?? resolveReportTemplateName(language, REPORT_TEMPLATE.name)}</strong>
               <span>{selectedTemplate
                 ? t(
-                    `Plantilla publicada de ${selectedTemplate.brand}. Los nuevos informes usarán su última versión.`,
-                    `Veröffentlichte Vorlage von ${selectedTemplate.brand}. Neue Berichte nutzen deren letzte Version.`
+                    `Veröffentlichte Vorlage von ${selectedTemplate.brand}. Neue Berichte nutzen deren letzte Version.`,
+                    `Plantilla publicada de ${selectedTemplate.brand}. Los nuevos informes usarán su última versión.`
                   )
                 : t(
-                    "El flujo guiado se abrirá con guardado automático y pasos adaptados al móvil.",
-                    "Der geführte Ablauf öffnet sich mit Autosave und mobilen Arbeitsschritten."
+                    "Der geführte Ablauf öffnet sich mit Autosave und mobilen Arbeitsschritten.",
+                    "El flujo guiado se abrirá con guardado automático y pasos adaptados al móvil."
                   )}</span>
             </div>
           )}
 
           <button type="button" disabled={!isOnline || creating} onClick={onCreateReport}>
-            {creating ? t("Creando informe...", "Bericht wird erstellt...") : t("Crear informe", "Bericht erstellen")}
+            {creating ? t("Bericht wird erstellt...", "Creando informe...") : t("Bericht erstellen", "Crear informe")}
           </button>
         </div>
       </SectionCard>
 
       <SectionCard
-        title={t("Informes", "Berichte")}
-        eyebrow={t("Seguimiento", "Übersicht")}
-        description={t("Borradores, finales y actividad reciente.", "Entwürfe, finale Berichte und letzte Aktivität.")}
+        title={t("Berichte", "Informes")}
+        eyebrow={t("Übersicht", "Seguimiento")}
+        description={t("Entwürfe, finale Berichte und letzte Aktivität.", "Borradores, finales y actividad reciente.")}
       >
         {reports.length === 0 ? (
           <EmptyState
-            title={t("No hay informes todavía", "Noch keine Berichte")}
-            description={t("Crea el primero para empezar a trabajar desde la nueva experiencia guiada.", "Erstelle den ersten Bericht, um mit dem neuen geführten Ablauf zu arbeiten.")}
+            title={t("Noch keine Berichte", "No hay informes todavía")}
+            description={t("Erstelle den ersten Bericht, um mit dem neuen geführten Ablauf zu arbeiten.", "Crea el primero para empezar a trabajar desde la nueva experiencia guiada.")}
           />
         ) : (
+          <div className="report-list-wrap">
+            <div className="report-toolbar">
+              <label className="report-toolbar__search">
+                <span className="visually-hidden">{t("Suchen", "Buscar")}</span>
+                <input
+                  type="search"
+                  inputMode="search"
+                  enterKeyHint="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t(
+                    "Nach Nummer, Objekt, Techniker suchen…",
+                    "Buscar por número, objeto, técnico…"
+                  )}
+                  aria-label={t("Berichte durchsuchen", "Buscar informes")}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="report-toolbar__clear"
+                    onClick={() => setSearch("")}
+                    aria-label={t("Suche löschen", "Limpiar búsqueda")}
+                  >
+                    ×
+                  </button>
+                )}
+              </label>
+              <div className="report-toolbar__filters" role="tablist" aria-label={t("Statusfilter", "Filtro de estado")}>
+                {(["all", "draft", "finalized"] as const).map((option) => {
+                  const label =
+                    option === "all"     ? t("Alle", "Todos") :
+                    option === "draft"   ? t("Entwürfe", "Borradores") :
+                                           t("Final", "Finalizados");
+                  const count =
+                    option === "all"   ? reports.length :
+                    reports.filter((r) => r.status === option).length;
+                  const active = statusFilter === option;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`report-toolbar__chip${active ? " report-toolbar__chip--active" : ""}`}
+                      onClick={() => setStatusFilter(option)}
+                    >
+                      {label} <span className="report-toolbar__count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {filteredReports.length === 0 ? (
+              <EmptyState
+                title={t("Keine Treffer", "Sin resultados")}
+                description={t(
+                  "Kein Bericht passt zu deiner Suche oder dem Filter.",
+                  "Ningún informe coincide con la búsqueda o el filtro."
+                )}
+              />
+            ) : (
           <div className="report-stack">
-            {reports.map((item) => (
+            {filteredReports.map((item) => (
               <article key={item.id} className="report-row">
                 <div className="report-row__copy">
                   <strong>{item.projectNumber}</strong>
@@ -193,26 +278,28 @@ const ReportsWorkspace = ({
                 </div>
                 <div className="report-row__actions">
                   <StatusChip tone={item.status === "finalized" ? "success" : "warning"}>
-                    {item.status === "finalized" ? t("Final", "Final") : t("Borrador", "Entwurf")}
+                    {item.status === "finalized" ? t("Final", "Final") : t("Entwurf", "Borrador")}
                   </StatusChip>
                   {item.createdBy && (
                     <small className="report-row__owner">
-                      {t("Creado por", "Erstellt von")}: {item.createdByEmail || item.createdByLabel || item.createdBy}
+                      {t("Erstellt von", "Creado por")}: {item.createdByEmail || item.createdByLabel || item.createdBy}
                     </small>
                   )}
                   <button type="button" className="ghost" onClick={() => onOpenReport(item.id)}>
-                    {t("Abrir", "Öffnen")}
+                    {t("Öffnen", "Abrir")}
                   </button>
                   <button
                     type="button"
                     disabled={!isOnline || deletingReportId === item.id || (!canDeleteOthers && item.createdBy !== currentUid)}
                     onClick={() => onDeleteReport(item)}
                   >
-                    {deletingReportId === item.id ? t("Eliminando...", "Löscht...") : t("Eliminar", "Löschen")}
+                    {deletingReportId === item.id ? t("Löscht...", "Eliminando...") : t("Löschen", "Eliminar")}
                   </button>
                 </div>
               </article>
             ))}
+          </div>
+            )}
           </div>
         )}
       </SectionCard>
@@ -237,6 +324,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
   const [visitModalOpen, setVisitModalOpen] = useState(false);
   const [notifyingVisitId, setNotifyingVisitId] = useState("");
   const [deletingReportId, setDeletingReportId] = useState("");
+  const [pendingDeleteReport, setPendingDeleteReport] = useState<ReportListItem | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<CompanyId | "">("");
   const [availableTemplates, setAvailableTemplates] = useState<TemplateSummary[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -250,7 +338,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
     technicianName: "",
     sendNotification: false
   });
-  const t = (esValue: string, deValue: string) => translate(language, deValue, esValue);
+  const t = createTranslator(language);
   const userLabel = user.displayName?.trim() || user.email?.trim() || defaultUserLabel(language);
 
   useEffect(() => {
@@ -261,18 +349,18 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         setAvailableTemplates(result.data.filter((item) => item.publishedVersionId));
       })
       .catch((templateError) => {
-        setError(templateError instanceof Error ? templateError.message : t("No se pudieron cargar las plantillas.", "Vorlagen konnten nicht geladen werden."));
+        setError(templateError instanceof Error ? templateError.message : t("Vorlagen konnten nicht geladen werden.", "No se pudieron cargar las plantillas."));
       })
       .finally(() => setLoadingTemplates(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const navItems: SidebarNavItem[] = [
-    { id: "home", label: t("Hoy", "Heute"), description: t("Qué hacer ahora", "Was jetzt ansteht") },
-    { id: "agenda", label: t("Visitas", "Einsätze"), description: t("Agenda operativa", "Operative Planung") },
-    { id: "clients", label: t("Clientes", "Kunden"), description: t("Contactos e historial", "Kontakte und Verlauf"), badge: String(clients.length) },
-    { id: "reports", label: t("Trabajo", "Arbeit"), description: t("Borradores y entregas", "Entwürfe und Ausgaben"), badge: String(reports.length) },
-    ...(userRole === "admin" ? [{ id: "admin", label: t("Admin", "Admin"), description: t("Sistema y control", "System und Steuerung") }] : [])
+    { id: "home", label: t("Heute", "Hoy"), description: t("Was jetzt ansteht", "Qué hacer ahora") },
+    { id: "agenda", label: t("Einsätze", "Visitas"), description: t("Operative Planung", "Agenda operativa") },
+    { id: "clients", label: t("Kunden", "Clientes"), description: t("Kontakte und Verlauf", "Contactos e historial"), badge: String(clients.length) },
+    { id: "reports", label: t("Arbeit", "Trabajo"), description: t("Entwürfe und Ausgaben", "Borradores y entregas"), badge: String(reports.length) },
+    ...(userRole === "admin" ? [{ id: "admin", label: t("Admin", "Admin"), description: t("System und Steuerung", "Sistema y control") }] : [])
   ];
 
   useEffect(() => {
@@ -450,7 +538,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const createReport = async () => {
     if (!isOnline) {
-      setError(t("Sin conexión: solo puedes crear informes en línea.", "Offline: Berichte können nur online erstellt werden."));
+      setError(t("Offline: Berichte können nur online erstellt werden.", "Sin conexión: solo puedes crear informes en línea."));
       return;
     }
 
@@ -480,10 +568,10 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      setNotice(t("Informe creado.", "Bericht erstellt."));
+      setNotice(t("Bericht erstellt.", "Informe creado."));
       onOpenReport(docRef.id);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : t("No se pudo crear el informe.", "Bericht konnte nicht erstellt werden."));
+      setError(createError instanceof Error ? createError.message : t("Bericht konnte nicht erstellt werden.", "No se pudo crear el informe."));
     } finally {
       setCreating(false);
     }
@@ -491,18 +579,18 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const createVisit = async () => {
     if (!isOnline) {
-      setError(t("Sin conexión: no se pueden crear visitas.", "Offline: Einsätze können nicht erstellt werden."));
+      setError(t("Offline: Einsätze können nicht erstellt werden.", "Sin conexión: no se pueden crear visitas."));
       return;
     }
 
     const selectedClient = clients.find((client) => client.id === visitDraft.clientId);
     if (!selectedClient) {
-      setError(t("Primero debes seleccionar un cliente existente.", "Bitte zuerst einen vorhandenen Kunden auswählen."));
+      setError(t("Bitte zuerst einen vorhandenen Kunden auswählen.", "Primero debes seleccionar un cliente existente."));
       return;
     }
 
     if (!visitDraft.date || !visitDraft.time) {
-      setError(t("Fecha y hora son obligatorias para la visita.", "Datum und Uhrzeit sind für den Einsatz erforderlich."));
+      setError(t("Datum und Uhrzeit sind für den Einsatz erforderlich.", "Fecha y hora son obligatorias para la visita."));
       return;
     }
 
@@ -562,17 +650,17 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
           const callable = httpsCallable<{ reportId: string }, { recipient: string }>(functions, "sendVisitNotification");
           const result = await callable({ reportId: docRef.id });
           pushToast(t(
-            `✉ Notificación enviada a ${result.data.recipient}`,
-            `✉ Benachrichtigung gesendet an ${result.data.recipient}`
+            `✉ Benachrichtigung gesendet an ${result.data.recipient}`,
+            `✉ Notificación enviada a ${result.data.recipient}`
           ), "success");
         } catch {
           pushToast(t(
-            "Visita creada, pero el correo no se pudo enviar.",
-            "Einsatz erstellt, aber E-Mail konnte nicht gesendet werden."
+            "Einsatz erstellt, aber E-Mail konnte nicht gesendet werden.",
+            "Visita creada, pero el correo no se pudo enviar."
           ), "error");
         }
       } else {
-        pushToast(t("Visita creada correctamente.", "Einsatz erfolgreich erstellt."), "success");
+        pushToast(t("Einsatz erfolgreich erstellt.", "Visita creada correctamente."), "success");
       }
 
       setVisitModalOpen(false);
@@ -585,7 +673,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         sendNotification: false
       });
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : t("No se pudo crear la visita.", "Einsatz konnte nicht erstellt werden."));
+      setError(createError instanceof Error ? createError.message : t("Einsatz konnte nicht erstellt werden.", "No se pudo crear la visita."));
     } finally {
       setCreatingVisit(false);
     }
@@ -593,12 +681,12 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const notifyVisitByEmail = async (reportId: string) => {
     if (!isOnline) {
-      setError(t("Sin conexión: no se puede enviar el correo.", "Offline: E-Mail kann nicht gesendet werden."));
+      setError(t("Offline: E-Mail kann nicht gesendet werden.", "Sin conexión: no se puede enviar el correo."));
       return;
     }
 
     const confirmed = window.confirm(
-      t("¿Enviar la notificación de visita al cliente ahora?", "Die Einsatzbenachrichtigung jetzt an den Kunden senden?")
+      t("Die Einsatzbenachrichtigung jetzt an den Kunden senden?", "¿Enviar la notificación de visita al cliente ahora?")
     );
     if (!confirmed) {
       return;
@@ -611,12 +699,12 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
       const callable = httpsCallable<{ reportId: string }, { recipient: string; sentAt: string }>(functions, "sendVisitNotification");
       const result = await callable({ reportId });
       pushToast(t(
-        `✉ Notificación enviada a ${result.data.recipient}`,
-        `✉ Benachrichtigung gesendet an ${result.data.recipient}`
+        `✉ Benachrichtigung gesendet an ${result.data.recipient}`,
+        `✉ Notificación enviada a ${result.data.recipient}`
       ), "success");
     } catch (notifyError) {
       pushToast(
-        notifyError instanceof Error ? notifyError.message : t("No se pudo enviar la notificación.", "Benachrichtigung konnte nicht gesendet werden."),
+        notifyError instanceof Error ? notifyError.message : t("Benachrichtigung konnte nicht gesendet werden.", "No se pudo enviar la notificación."),
         "error"
       );
     } finally {
@@ -624,23 +712,16 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
     }
   };
 
-  const deleteReportHandler = async (item: ReportListItem) => {
-    if (!isOnline) {
-      return;
-    }
+  // Solo abre el modal — la confirmación real ocurre en `confirmDeleteReport`.
+  const deleteReportHandler = (item: ReportListItem) => {
+    if (!isOnline) return;
+    setPendingDeleteReport(item);
+  };
 
-    const firstConfirm = window.confirm(t(
-      "¿Estás seguro de que quieres eliminar este trabajo? Esta acción no se puede deshacer.",
-      "Sind Sie sicher, dass Sie diesen Auftrag löschen möchten? Dies kann nicht rückgängig gemacht werden."
-    ));
-    if (!firstConfirm) return;
-
-    const secondConfirm = window.confirm(t(
-      "¡Atención! También se eliminarán las fotos y PDFs asociados. ¿Confirmar eliminación definitiva?",
-      "Achtung! Zugehörige Bilder und PDFs werden ebenfalls gelöscht. Endgültige Löschung bestätigen?"
-    ));
-    if (!secondConfirm) return;
-
+  const confirmDeleteReport = async () => {
+    const item = pendingDeleteReport;
+    if (!item || !isOnline) return;
+    setPendingDeleteReport(null);
     setDeletingReportId(item.id);
     setError("");
     setNotice("");
@@ -648,9 +729,9 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
     try {
       const callable = httpsCallable<{ reportId: string }, { deleted: boolean }>(functions, "deleteReport");
       await callable({ reportId: item.id });
-      setNotice(t("Informe eliminado.", "Bericht gelöscht."));
+      pushToast(t("Bericht gelöscht.", "Informe eliminado."), "success");
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : t("No se pudo eliminar el informe.", "Bericht konnte nicht gelöscht werden."));
+      setError(deleteError instanceof Error ? deleteError.message : t("Bericht konnte nicht gelöscht werden.", "No se pudo eliminar el informe."));
     } finally {
       setDeletingReportId("");
     }
@@ -668,7 +749,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const handleMoveVisit = async (reportId: string, newDate: string, newTime: string) => {
     if (!isOnline) {
-      setError(t("Sin conexión: no se puede mover la visita.", "Offline: Einsatz kann nicht verschoben werden."));
+      setError(t("Offline: Einsatz kann nicht verschoben werden.", "Sin conexión: no se puede mover la visita."));
       return;
     }
     try {
@@ -677,13 +758,13 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         updatedAt: serverTimestamp()
       });
     } catch (moveError) {
-      setError(moveError instanceof Error ? moveError.message : t("No se pudo mover la visita.", "Einsatz konnte nicht verschoben werden."));
+      setError(moveError instanceof Error ? moveError.message : t("Einsatz konnte nicht verschoben werden.", "No se pudo mover la visita."));
     }
   };
 
   const handleResizeVisit = async (reportId: string, newDurationMinutes: string) => {
     if (!isOnline) {
-      setError(t("Sin conexión: no se puede ajustar la duración.", "Offline: Einsatzdauer kann nicht angepasst werden."));
+      setError(t("Offline: Einsatzdauer kann nicht angepasst werden.", "Sin conexión: no se puede ajustar la duración."));
       return;
     }
     try {
@@ -692,7 +773,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         updatedAt: serverTimestamp()
       });
     } catch (resizeError) {
-      setError(resizeError instanceof Error ? resizeError.message : t("No se pudo ajustar la duración.", "Einsatzdauer konnte nicht angepasst werden."));
+      setError(resizeError instanceof Error ? resizeError.message : t("Einsatzdauer konnte nicht angepasst werden.", "No se pudo ajustar la duración."));
     }
   };
 
@@ -701,31 +782,31 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
   const pageTitle =
     activeMenu === "home"
-      ? t("Centro de hoy", "Heutige Zentrale")
+      ? t("Heutige Zentrale", "Centro de hoy")
       : activeMenu === "agenda"
-        ? t("Visitas y agenda", "Einsätze und Agenda")
+        ? t("Einsätze und Agenda", "Visitas y agenda")
           : activeMenu === "clients"
-            ? t("Clientes", "Kunden")
+            ? t("Kunden", "Clientes")
             : activeMenu === "reports"
-              ? t("Trabajo en curso", "Aktuelle Arbeit")
+              ? t("Aktuelle Arbeit", "Trabajo en curso")
             : t("Admin", "Admin");
 
   const pageSubtitle =
     activeMenu === "home"
-      ? t("Qué hacer ahora, qué está pendiente y cuál es la siguiente mejor acción.", "Was jetzt ansteht, was noch offen ist und was als Nächstes sinnvoll ist.")
+      ? t("Was jetzt ansteht, was noch offen ist und was als Nächstes sinnvoll ist.", "Qué hacer ahora, qué está pendiente y cuál es la siguiente mejor acción.")
       : activeMenu === "agenda"
-        ? t("Vista híbrida de calendario y lista operativa.", "Hybride Kalender- und Einsatzliste.")
+        ? t("Hybride Kalender- und Einsatzliste.", "Vista híbrida de calendario y lista operativa.")
         : activeMenu === "clients"
-          ? t("Contactos con historial y acceso rápido.", "Kontakte mit Verlauf und Schnellzugriff.")
+          ? t("Kontakte mit Verlauf und Schnellzugriff.", "Contactos con historial y acceso rápido.")
           : activeMenu === "reports"
-            ? t("Crea, retoma y cierra informes desde el nuevo flujo guiado.", "Berichte im neuen geführten Ablauf erstellen, fortsetzen und abschließen.")
-            : t("Usuarios, perfil y configuración técnica en un solo panel.", "Benutzer, Profil und technische Konfiguration in einem Panel.");
+            ? t("Berichte im neuen geführten Ablauf erstellen, fortsetzen und abschließen.", "Crea, retoma y cierra informes desde el nuevo flujo guiado.")
+            : t("Benutzer, Profil und technische Konfiguration in einem Panel.", "Usuarios, perfil y configuración técnica en un solo panel.");
 
   return (
     <>
     <AppShell
       brandTitle={branding.companyName}
-      brandSubtitle={t("Inspección, clientes e informes en una sola vista.", "Inspektion, Kunden und Berichte in einer Oberfläche.")}
+      brandSubtitle={t("Inspektion, Kunden und Berichte in einer Oberfläche.", "Inspección, clientes e informes en una sola vista.")}
       logoUrl={branding.logoUrl || undefined}
       pageTitle={pageTitle}
       pageSubtitle={pageSubtitle}
@@ -749,11 +830,11 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
         {(loadingReports || loadingClients) && (
           <SectionCard
-            title={t("Cargando espacio de trabajo", "Arbeitsbereich wird geladen")}
-            eyebrow={t("Estado", "Status")}
-            description={t("Preparando datos operativos y CRM.", "Operative Daten und CRM werden vorbereitet.")}
+            title={t("Arbeitsbereich wird geladen", "Cargando espacio de trabajo")}
+            eyebrow={t("Status", "Estado")}
+            description={t("Operative Daten und CRM werden vorbereitet.", "Preparando datos operativos y CRM.")}
           >
-            <p>{t("Un momento…", "Einen Moment...")}</p>
+            <p>{t("Einen Moment...", "Un momento…")}</p>
           </SectionCard>
         )}
 
@@ -783,10 +864,10 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
             {/* ── Quick visit modal ── */}
             <Dialog
               open={visitModalOpen}
-              title={t("Nueva visita", "Neuer Einsatz")}
+              title={t("Neuer Einsatz", "Nueva visita")}
               description={t(
-                "Rellena los datos del einsatz. La visita quedará en el calendario sin abrir el formulario.",
-                "Einsatzdaten ausfüllen. Der Einsatz erscheint im Kalender ohne das Formular zu öffnen."
+                "Einsatzdaten ausfüllen. Der Einsatz erscheint im Kalender ohne das Formular zu öffnen.",
+                "Rellena los datos de la visita. La visita quedará en el calendario sin abrir el formulario."
               )}
               onClose={() => setVisitModalOpen(false)}
               size="default"
@@ -797,21 +878,21 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                     disabled={creatingVisit || !isOnline || !visitDraft.clientId}
                     onClick={() => void createVisit()}
                   >
-                    {creatingVisit ? t("Guardando...", "Wird gespeichert...") : t("Guardar visita", "Einsatz speichern")}
+                    {creatingVisit ? t("Wird gespeichert...", "Guardando...") : t("Einsatz speichern", "Guardar visita")}
                   </button>
                   <button type="button" className="ghost" onClick={() => setVisitModalOpen(false)} disabled={creatingVisit}>
-                    {t("Cancelar", "Abbrechen")}
+                    {t("Abbrechen", "Cancelar")}
                   </button>
                 </div>
               }
             >
               {clients.length === 0 ? (
                 <EmptyState
-                  title={t("Primero crea un cliente", "Zuerst einen Kunden anlegen")}
-                  description={t("La visita debe vincularse a un cliente ya creado.", "Der Einsatz muss mit einem vorhandenen Kunden verknüpft werden.")}
+                  title={t("Zuerst einen Kunden anlegen", "Primero crea un cliente")}
+                  description={t("Der Einsatz muss mit einem vorhandenen Kunden verknüpft werden.", "La visita debe vincularse a un cliente ya creado.")}
                   action={
                     <button type="button" onClick={() => { setVisitModalOpen(false); setActiveMenu("clients"); }}>
-                      {t("Ir a clientes", "Zu Kunden")}
+                      {t("Zu Kunden", "Ir a clientes")}
                     </button>
                   }
                 />
@@ -819,13 +900,13 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                 <div className="stack">
                   <div className="grid two">
                     <label style={{ gridColumn: "1 / -1" }}>
-                      {t("Cliente", "Kunde")}
+                      {t("Kunde", "Cliente")}
                       <select
                         value={visitDraft.clientId}
                         onChange={(e) => setVisitDraft((c) => ({ ...c, clientId: e.target.value }))}
                         required
                       >
-                        <option value="">{t("Seleccionar cliente…", "Kunden auswählen…")}</option>
+                        <option value="">{t("Kunden auswählen…", "Seleccionar cliente…")}</option>
                         {clients.map((client) => (
                           <option key={client.id} value={client.id}>
                             {[getClientFullName(client), client.location].filter(Boolean).join(" · ")}
@@ -834,7 +915,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                       </select>
                     </label>
                     <label>
-                      {t("Fecha", "Datum")}
+                      {t("Datum", "Fecha")}
                       <input
                         type="date"
                         value={visitDraft.date}
@@ -842,7 +923,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                       />
                     </label>
                     <label>
-                      {t("Hora", "Uhrzeit")}
+                      {t("Uhrzeit", "Hora")}
                       <input
                         type="time"
                         value={visitDraft.time}
@@ -850,7 +931,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                       />
                     </label>
                     <label>
-                      {t("Duración (min)", "Dauer (Min.)")}
+                      {t("Dauer (Min.)", "Duración (min)")}
                       <input
                         type="number"
                         min="15"
@@ -860,7 +941,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                       />
                     </label>
                     <label>
-                      {t("Técnico asignado", "Zuständiger Techniker")}
+                      {t("Zuständiger Techniker", "Técnico asignado")}
                       <input
                         type="text"
                         value={visitDraft.technicianName}
@@ -880,8 +961,8 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                           onChange={(e) => setVisitDraft((c) => ({ ...c, sendNotification: e.target.checked }))}
                         />
                         <span>{t(
-                          `Notificar al cliente por correo (${clientForNotify.email})`,
-                          `Kunden per E-Mail benachrichtigen (${clientForNotify.email})`
+                          `Kunden per E-Mail benachrichtigen (${clientForNotify.email})`,
+                          `Notificar al cliente por correo (${clientForNotify.email})`
                         )}</span>
                       </label>
                     );
@@ -891,9 +972,9 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
             </Dialog>
 
             <SectionCard
-              title={t("Agenda de visitas", "Einsatzplanung")}
-              eyebrow={t("Planificación", "Planung")}
-              description={t("Pulsa una celda vacía del calendario para añadir una visita rápidamente.", "Leere Zelle antippen um schnell einen Einsatz hinzuzufügen.")}
+              title={t("Einsatzplanung", "Agenda de visitas")}
+              eyebrow={t("Planung", "Planificación")}
+              description={t("Leere Zelle antippen um schnell einen Einsatz hinzuzufügen.", "Pulsa una celda vacía del calendario para añadir una visita rápidamente.")}
               actions={
                 <button
                   type="button"
@@ -903,7 +984,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
                     setVisitModalOpen(true);
                   }}
                 >
-                  {t("+ Nueva visita", "+ Neuer Einsatz")}
+                  {t("+ Neuer Einsatz", "+ Nueva visita")}
                 </button>
               }
             >
@@ -921,31 +1002,34 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
 
             {agendaItems.length === 0 ? (
               <SectionCard
-                title={t("Sin visitas en esta fecha", "Keine Termine an diesem Tag")}
+                title={t("Keine Termine an diesem Tag", "Sin visitas en esta fecha")}
                 eyebrow={t("Agenda", "Agenda")}
                 description={t(
                   clients.length === 0
-                    ? "Primero crea un cliente y luego programa una visita."
-                    : "Crea una visita para este día o revisa otra fecha del calendario.",
-                  clients.length === 0
                     ? "Lege zuerst einen Kunden an und plane dann einen Einsatz."
-                    : "Lege einen Einsatz für diesen Tag an oder prüfe ein anderes Datum im Kalender."
-                )} 
+                    : "Lege einen Einsatz für diesen Tag an oder prüfe ein anderes Datum im Kalender.",
+                  clients.length === 0
+                    ? "Primero crea un cliente y luego programa una visita."
+                    : "Crea una visita para este día o revisa otra fecha del calendario."
+                )}
               >
                 <EmptyState
-                  title={t(clients.length === 0 ? "No hay clientes todavía" : "Sin visitas reales todavía", clients.length === 0 ? "Noch keine Kunden" : "Noch keine echten Termine")}
+                  title={t(
+                    clients.length === 0 ? "Noch keine Kunden" : "Noch keine echten Termine",
+                    clients.length === 0 ? "No hay clientes todavía" : "Sin visitas reales todavía"
+                  )}
                   description={t(
                     clients.length === 0
-                      ? "Necesitas al menos un cliente para crear una visita."
-                      : "Programa una visita desde esta pantalla para que aparezca en la agenda.",
-                    clients.length === 0
                       ? "Du brauchst mindestens einen Kunden, um einen Einsatz anzulegen."
-                      : "Plane einen Einsatz direkt auf diesem Bildschirm, damit er in der Agenda erscheint."
+                      : "Plane einen Einsatz direkt auf diesem Bildschirm, damit er in der Agenda erscheint.",
+                    clients.length === 0
+                      ? "Necesitas al menos un cliente para crear una visita."
+                      : "Programa una visita desde esta pantalla para que aparezca en la agenda."
                   )}
                   action={
                     clients.length === 0 ? (
                       <button type="button" onClick={() => setActiveMenu("clients")}>
-                        {t("Crear / abrir clientes", "Kunden öffnen")}
+                        {t("Kunden öffnen", "Crear / abrir clientes")}
                       </button>
                     ) : undefined
                   }
@@ -994,7 +1078,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
             creating={creating}
             onCreateReport={createReport}
             onOpenReport={onOpenReport}
-            onDeleteReport={(item) => void deleteReportHandler(item)}
+            onDeleteReport={deleteReportHandler}
           />
         )}
 
@@ -1010,6 +1094,52 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         )}
       </div>
     </AppShell>
+
+    <Dialog
+      open={Boolean(pendingDeleteReport)}
+      onClose={() => setPendingDeleteReport(null)}
+      title={t("Bericht endgültig löschen?", "¿Eliminar este informe definitivamente?")}
+      description={t(
+        "Dieser Vorgang kann nicht rückgängig gemacht werden.",
+        "Esta acción no se puede deshacer."
+      )}
+      size="narrow"
+      footer={
+        <>
+          <button type="button" className="ghost" onClick={() => setPendingDeleteReport(null)}>
+            {t("Abbrechen", "Cancelar")}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={!isOnline}
+            onClick={() => void confirmDeleteReport()}
+          >
+            {t("Endgültig löschen", "Eliminar definitivamente")}
+          </button>
+        </>
+      }
+    >
+      {pendingDeleteReport && (
+        <div className="confirm-delete">
+          <p>
+            <strong>
+              {pendingDeleteReport.projectNumber || t("(ohne Nummer)", "(sin número)")}
+            </strong>
+            {pendingDeleteReport.objectLabel && (
+              <>
+                {" "}— {pendingDeleteReport.objectLabel}
+              </>
+            )}
+          </p>
+          <ul className="confirm-delete__warnings">
+            <li>{t("Alle Fotos werden gelöscht.", "Se eliminarán todas las fotos.")}</li>
+            <li>{t("Generierte PDFs werden entfernt.", "Se eliminarán los PDFs generados.")}</li>
+            <li>{t("Diese Aktion ist nicht rückgängig zu machen.", "Esta acción es irreversible.")}</li>
+          </ul>
+        </div>
+      )}
+    </Dialog>
 
     <Toast messages={toasts} onDismiss={dismissToast} />
     </>

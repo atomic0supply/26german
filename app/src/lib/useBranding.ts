@@ -82,17 +82,38 @@ export const useBranding = (): BrandingConfig => {
     document.documentElement.style.setProperty("--primary-rgb", `${red}, ${green}, ${blue}`);
   }, [branding.primaryColor]);
 
-  // Sync favicon
+  // Sync favicon + apple-touch-icon from FAVICON-VORSCHAU (fallback to logo)
   useEffect(() => {
     const faviconUrl = branding.faviconUrl || branding.logoUrl;
     if (!faviconUrl) return;
-    let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
-    if (!link) {
-      link = document.createElement("link");
-      link.rel = "icon";
-      document.head.appendChild(link);
-    }
-    link.href = faviconUrl;
+
+    const guessType = (url: string) => {
+      const path = url.split("?")[0].toLowerCase();
+      if (path.endsWith(".svg")) return "image/svg+xml";
+      if (path.endsWith(".png")) return "image/png";
+      if (path.endsWith(".webp")) return "image/webp";
+      if (path.endsWith(".ico")) return "image/x-icon";
+      if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+      return "";
+    };
+    const type = guessType(faviconUrl);
+
+    const ensureLink = (rel: string) => {
+      let link = document.querySelector<HTMLLinkElement>(`link[rel='${rel}']`);
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+      return link;
+    };
+
+    const icon = ensureLink("icon");
+    icon.href = faviconUrl;
+    if (type) icon.type = type;
+
+    const appleIcon = ensureLink("apple-touch-icon");
+    appleIcon.href = faviconUrl;
   }, [branding.faviconUrl, branding.logoUrl]);
 
   return branding;

@@ -20,6 +20,7 @@ interface AppShellProps {
   navItems: SidebarNavItem[];
   activeItem: string;
   onSelect: (itemId: string) => void;
+  onOpenPalette?: () => void;
   children: ReactNode;
 }
 
@@ -100,6 +101,7 @@ export const AppShell = ({
   navItems,
   activeItem,
   onSelect,
+  onOpenPalette,
   children
 }: AppShellProps) => {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
@@ -320,6 +322,22 @@ export const AppShell = ({
           </div>
 
           <div className="app-stage__meta">
+            {onOpenPalette && (
+              <button
+                type="button"
+                className="app-stage__palette"
+                onClick={onOpenPalette}
+                aria-label={t("Befehlspalette öffnen", "Abrir paleta de comandos")}
+                title={t("Befehle suchen (⌘K)", "Buscar comandos (⌘K)")}
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+                  <path d="m21 21-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span className="app-stage__palette-label">{t("Suchen", "Buscar")}</span>
+                <kbd>⌘K</kbd>
+              </button>
+            )}
             <span className={isOnline ? "status-pill online" : "status-pill offline"}>
               {isOnline ? t("Online", "Online") : t("Offline", "Sin conexión")}
             </span>

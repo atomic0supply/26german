@@ -6770,3 +6770,53 @@ button.danger[disabled] { opacity: 0.55; cursor: not-allowed; }
 .partner-card__action:disabled {
   opacity: 0.4;
 }
+
+/* ---- Botón ⌘K en el TopBar global del shell --------------------------- */
+.app-stage__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem 0.35rem 0.55rem;
+  border: 1px solid rgba(16, 32, 51, 0.14);
+  background: #fff;
+  border-radius: 999px;
+  color: var(--ink, #102033);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  min-height: 36px;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.app-stage__palette:hover {
+  border-color: var(--accent, #135f96);
+  background: rgba(19, 95, 150, 0.04);
+}
+.app-stage__palette:focus-visible {
+  outline: 2px solid var(--accent, #135f96);
+  outline-offset: 2px;
+}
+.app-stage__palette svg {
+  color: var(--ink-muted, #5a6b7e);
+  flex-shrink: 0;
+}
+.app-stage__palette kbd {
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  background: rgba(16, 32, 51, 0.06);
+  border-radius: 6px;
+  color: var(--ink-muted, #5a6b7e);
+}
+@media (max-width: 720px) {
+  .app-stage__palette-label,
+  .app-stage__palette kbd {
+    display: none;
+  }
+  .app-stage__palette {
+    padding: 0.35rem;
+    width: 36px;
+    height: 36px;
+    justify-content: center;
+  }
+}

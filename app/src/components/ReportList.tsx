@@ -35,6 +35,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { Toast, ToastMessage, ToastTone } from "./ui/Toast";
 import { SectionCard } from "./ui/SectionCard";
 import { StatusChip } from "./ui/StatusChip";
+import { CommandPalette, CommandPaletteItem } from "./ui/CommandPalette";
 
 interface ReportListProps {
   uid: string;
@@ -325,6 +326,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
   const [notifyingVisitId, setNotifyingVisitId] = useState("");
   const [deletingReportId, setDeletingReportId] = useState("");
   const [pendingDeleteReport, setPendingDeleteReport] = useState<ReportListItem | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [selectedCompany, setSelectedCompany] = useState<CompanyId | "">("");
   const [availableTemplates, setAvailableTemplates] = useState<TemplateSummary[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -535,6 +537,20 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
       date: selectedAgendaDate
     }));
   }, [selectedAgendaDate]);
+
+  // Atajo global Cmd/Ctrl+K → abre la command palette del shell.
+  // No se monta cuando hay un informe abierto (el editor tiene su propio listener).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const cmd = event.metaKey || event.ctrlKey;
+      if (cmd && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const createReport = async () => {
     if (!isOnline) {
@@ -819,6 +835,7 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
       userRole={userRole}
       onLanguageChange={onLanguageChange}
       onLogout={logout}
+      onOpenPalette={() => setPaletteOpen(true)}
     >
       <div className="workspace-stack">
         {(error || notice) && (
@@ -1140,6 +1157,81 @@ export const ReportList = ({ uid, user, userRole, isOnline, onOpenReport, langua
         </div>
       )}
     </Dialog>
+
+    <CommandPalette
+      open={paletteOpen}
+      onClose={() => setPaletteOpen(false)}
+      placeholder={t("Aktion, Bereich oder Bericht suchen…", "Buscar acción, sección o informe…")}
+      items={(() => {
+        const items: CommandPaletteItem[] = [
+          {
+            id: "nav-home",
+            label: t("Heute / Dashboard", "Hoy / Dashboard"),
+            group: t("Navigation", "Navegación"),
+            keywords: "home heute hoy dashboard panel inicio",
+            onRun: () => setActiveMenu("home"),
+          },
+          {
+            id: "nav-agenda",
+            label: t("Termine / Besuche", "Visitas / Agenda"),
+            group: t("Navigation", "Navegación"),
+            keywords: "agenda visitas termine besuche calendar",
+            onRun: () => setActiveMenu("agenda"),
+          },
+          {
+            id: "nav-clients",
+            label: t(`Kunden (${clients.length})`, `Clientes (${clients.length})`),
+            group: t("Navigation", "Navegación"),
+            keywords: "kunden clientes clients",
+            onRun: () => setActiveMenu("clients"),
+          },
+          {
+            id: "nav-reports",
+            label: t(`Berichte (${reports.length})`, `Trabajo / Informes (${reports.length})`),
+            group: t("Navigation", "Navegación"),
+            keywords: "berichte informes reports trabajo",
+            onRun: () => setActiveMenu("reports"),
+          },
+        ];
+        if (userRole === "admin") {
+          items.push({
+            id: "nav-admin",
+            label: "Admin",
+            group: t("Navigation", "Navegación"),
+            keywords: "admin verwaltung",
+            onRun: () => setActiveMenu("admin"),
+          });
+        }
+        items.push(
+          {
+            id: "action-new-report",
+            label: t("Neuen Bericht anlegen", "Crear nuevo informe"),
+            group: t("Aktionen", "Acciones"),
+            keywords: "nuevo crear informe report neu",
+            onRun: () => { setActiveMenu("reports"); void createReport(); },
+          },
+          {
+            id: "action-logout",
+            label: t("Abmelden", "Cerrar sesión"),
+            group: t("Aktionen", "Acciones"),
+            keywords: "logout cerrar sesion abmelden",
+            onRun: () => { void logout(); },
+          },
+        );
+        // Acceso directo a los primeros 12 informes recientes
+        for (const r of reports.slice(0, 12)) {
+          items.push({
+            id: `report-${r.id}`,
+            label: `${r.projectNumber || t("Ohne Nummer", "Sin número")} · ${r.objectLabel || ""}`.trim(),
+            hint: r.status === "finalized" ? "Final" : t("Entwurf", "Borrador"),
+            group: t("Berichte", "Informes"),
+            keywords: `${r.projectNumber} ${r.objectLabel} ${r.technicianName ?? ""}`,
+            onRun: () => onOpenReport(r.id),
+          });
+        }
+        return items;
+      })()}
+    />
 
     <Toast messages={toasts} onDismiss={dismissToast} />
     </>
